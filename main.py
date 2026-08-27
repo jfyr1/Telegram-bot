@@ -3,7 +3,7 @@ import json
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
-TOKEN = "8925599691:AAHIGxwCVTb5hYQ-bCWKVS7-u__xduobniE"
+TOKEN = os.environ.get("BOT_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 ADMIN_ID = 5734654153
 
@@ -25,32 +25,39 @@ def send_welcome(message):
     user_id = message.from_user.id
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     
-    # أزرار المستخدم العادي
-    btn1 = KeyboardButton("📚 المراحل الدراسية")
-    btn2 = KeyboardButton("ℹ️ حول البوت")
-    markup.add(btn1, btn2)
+    # أزرار القائمة للمستخدمين
+    btn1 = KeyboardButton("الكورس الاول 🔻")
+    btn2 = KeyboardButton("ملخصات الكورس الاول")
+    btn3 = KeyboardButton("الكورس الثاني 🔻")
+    btn4 = KeyboardButton("ملخصات الكورس الثاني")
+    btn5 = KeyboardButton("💬 التواصل معنا")
+    markup.add(btn1, btn2, btn3, btn4, btn5)
     
-    # أزرار تظهر فقط للمسؤول أسفل لوحة المفاتيح
+    # الأزرار الخاصة بالمسؤول (تظهر فقط للـ ID الخاص بك)
     if is_admin(user_id):
-        btn_admin1 = KeyboardButton("⚙️ إعدادات القوائم")
-        btn_admin2 = KeyboardButton("➕ إضافة قسم أو ملف")
-        markup.add(btn_admin1, btn_admin2)
+        btn_admin1 = KeyboardButton("🎛️ محرر الأزرار")
+        btn_admin2 = KeyboardButton("📝 تعديل المشاركات (المحتوى)")
+        btn_admin3 = KeyboardButton("💰 الرصيد")
+        btn_admin4 = KeyboardButton("🔓 Admin")
+        markup.add(btn_admin1, btn_admin2, btn_admin3, btn_admin4)
         
-    bot.send_message(message.chat.id, "أهلاً بك! استخدم الأزرار بالأسفل للتنقل:", reply_markup=markup)
+    bot.send_message(message.chat.id, "أهلاً بك في النظام التعليمي:", reply_markup=markup)
 
 @bot.message_handler(func=lambda message: True)
 def handle_messages(message):
     user_id = message.from_user.id
     text = message.text
     
-    if text == "📚 المراحل الدراسية":
-        bot.send_message(message.chat.id, "جاري عرض المراحل الدراسية...")
-    elif text == "⚙️ إعدادات القوائم" and is_admin(user_id):
-        bot.send_message(message.chat.id, "أنت الآن في لوحة تحكم المسؤول لتعديل القوائم.")
-    elif text == "➕ إضافة قسم أو ملف" and is_admin(user_id):
-        bot.send_message(message.chat.id, "أرسل تفاصيل القسم أو الملف الجديد للإضافة.")
+    if text == "🎛️ محرر الأزرار" and is_admin(user_id):
+        bot.send_message(message.chat.id, "أنت الآن في وضع **محرر الأزرار**. أرسل اسم القسم الجديد أو اختر الزر المراد تعديله.")
+    elif text == "📝 تعديل المشاركات (المحتوى)" and is_admin(user_id):
+        bot.send_message(message.chat.id, "أنت الآن في وضع **تعديل المحتوى (الملفات/الصور/الفيديوهات)**.")
+    elif text == "💰 الرصيد" and is_admin(user_id):
+        bot.send_message(message.chat.id, "الرصيد الحالي: معلومات حساب المسؤول.")
+    elif text == "🔓 Admin" and is_admin(user_id):
+        bot.send_message(message.chat.id, "لوحة صلاحيات المسؤول مفعلة بالكامل.")
     else:
-        bot.send_message(message.chat.id, "اختر من الأزرار الموجودة في الأسفل.")
+        bot.send_message(message.chat.id, "تم تلقي طلبك. استخدم الأزرار الظاهرة في الأسفل للتنقل.")
 
 if __name__ == "__main__":
     print("البوت يعمل الآن...")

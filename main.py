@@ -1,7 +1,7 @@
 import os
 import json
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
 TOKEN = "8925599691:AAEnU91zp05TD_PnZFb_DTmLZ8Ub_u5qzPM"
 bot = telebot.TeleBot(TOKEN)
@@ -17,11 +17,8 @@ def load_data():
             except:
                 pass
     return {
-        "root": {
-            "name": "القائمة الرئيسية",
-            "submenus": {},
-            "files": []
-        }
+        "buttons": [],
+        "content": {}
     }
 
 def save_data(data):
@@ -31,161 +28,120 @@ def save_data(data):
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
-# تتبع مسار وتصرفات المستخدم أو المشرف الحالي
+# تتبع حالات المسؤول التنقلية
 admin_states = {}
 
-def get_menu_markup(path, user_id):
+def get_dynamic_keyboard(user_id):
     data = load_data()
-    current = data["root"]
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     
-    # التنقل داخل الهيكل حسب المسار الحالي
-    if path != "root":
-        keys = path.split("/")
-        for key in keys[1:]:
-            if key in current["submenus"]:
-                current = current["submenus"][key]
-            else:
-                break
-
-    markup = InlineKeyboardMarkup(row_width=2)
-    
-    # أزرار الأقسام الفرعية التابعة للمستوى الحالي
-    for sub_name in current["submenus"]:
-        new_path = f"{path}/{sub_name}"
-        markup.add(InlineKeyboardButton(f"📁 {sub_name}", callback_data=f"nav_{new_path}"))
+    # إضافة الأزرار والقوائم المسجلة
+    for btn_text in data["buttons"]:
+        markup.add(KeyboardButton(btn_text))
         
-    # عرض الملفات أو المحتوى المرتبط بهذا المستوى إن توفر
-    if "files" in current and current["files"]:
-        for idx, file_text in enumerate(current["files"]):
-            markup.add(InlineKeyboardButton(f"📄 {file_text[:25]}...", callback_data=f"file_{path}_{idx}"))
-
-    # زر الرجوع للخلف إذا لم نكن في الجذر
-    if path != "root":
-        parent_path = "/".join(path.split("/")[:-1])
-        markup.add(InlineKeyboardButton("🔙 رجوع", callback_data=f"nav_{parent_path}"))
-    else:
-        markup.add(InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="nav_root"))
-
-    # أزرار تحكم المشرف تظهر في أي مستوى يدخله
+    # أزرار الإدارة للمشرف في الأسفل
     if is_admin(user_id):
-        markup.add(
-            InlineKeyboardButton("➕ إضافة قسم/زر", callback_data=f"add_sub_{path}"),
-            InlineKeyboardButton("🗑️ حذف قسم", callback_data=f"del_sub_{path}")
-        )
-        markup.add(
-            InlineKeyboardButton("📝 إضافة محتوى/رسالة", callback_data=f"add_content_{path}"),
-            InlineKeyboardButton("🔴 إيقاف المحرر", callback_data="stop_admin")
-        )
+        markup.add(KeyboardButton("🎛️ محرر الأزرار"), KeyboardButton("📝 تعديل المشاركات (المحتوى)"))
+        markup.add(KeyboardButton("➕ إضافة زر"), KeyboardButton("🗑️ حذف زر"))
+        markup.add(KeyboardButton("🔴 إيقاف المحرر (التعديل)"))
         
-    return markup, current
+    return markup
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.from_user.id
-    markup, current = get_menu_markup("root", user_id)
-    bot.send_message(message.chat.id, f"📍 أنت الآن في: **{current['name']}**\nاختر من الأقسام التالية:", reply_markup=markup, parse_mode="Markdown")
-
-@bot.callback_query_handler(func=lambda call: True)
-def handle_callbacks(call):
-    user_id = call.from_user.id
-    data = load_data()
-    query = call.data
-    
-    if query.startswith("nav_"):
-        path = query.replace("nav_", "")
-        markup, current = get_menu_markup(path, user_id)
-        bot.answer_callback_query(call.id, f"الانتقال إلى: {current['name']}")
-        try:
-            bot.edit_message_text(f"📍 أنت الآن في: **{current['name']}**", 
-                                  call.message.chat.id, call.message.message_id, 
-                                  reply_markup=markup, parse_mode="Markdown")
-        except:
-            bot.send_message(call.message.chat.id, f"📍 أنت الآن في: **{current['name']}**", reply_markup=markup, parse_mode="Markdown")
-
-    elif query.startswith("add_sub_") and is_admin(user_id):
-        path = query.replace("add_sub_", "")
-        admin_states[user_id] = {"action": "add_sub", "path": path}
-        bot.answer_callback_query(call.id, "أرسل اسم القسم الجديد")
-        bot.send_message(call.message.chat.id, "✏️ أرسل الآن اسم القسم أو الزر الفرعي الجديد الذي تريد إضافته هنا:")
-
-    elif query.startswith("del_sub_") and is_admin(user_id):
-        path = query.replace("del_sub_", "")
-        admin_states[user_id] = {"action": "del_sub", "path": path}
-        bot.answer_callback_query(call.id, "أرسل اسم القسم للحذف")
-        bot.send_message(call.message.chat.id, "🗑️ أرسل اسم القسم الفرعي الذي تريد حذفه من هذا المستودع:")
-
-    elif query.startswith("add_content_") and is_admin(user_id):
-        path = query.replace("add_content_", "")
-        admin_states[user_id] = {"action": "add_content", "path": path}
-        bot.answer_callback_query(call.id, "أرسل محتوى المشاركة")
-        bot.send_message(call.message.chat.id, "📝 أرسل الآن النص أو الرسالة أو المحتوى لتتم إضافته لهذا القسم وتأكيد الحفظ:")
-
-    elif query == "stop_admin":
-        if user_id in admin_states:
-            del admin_states[user_id]
-        bot.answer_callback_query(call.id, "تم إيقاف وضع التحرير.")
-        bot.send_message(call.message.chat.id, "🔴 **تم إيقاف محرر الصلاحيات بنجاح.**")
-
-    elif query.startswith("file_"):
-        parts = query.split("_")
-        idx = int(parts[-1])
-        path = "_".join(parts[1:-1])
-        # استخراج المحتوى وعرضه
-        current = data["root"]
-        if path != "root":
-            for key in path.split("/")[1:]:
-                current = current["submenus"][key]
-        file_content = current["files"][idx]
-        bot.answer_callback_query(call.id, "عرض المحتوى")
-        bot.send_message(call.message.chat.id, f"📄 **محتوى المشاركة:**\n\n{file_content}")
+    markup = get_dynamic_keyboard(user_id)
+    bot.send_message(message.chat.id, "أهلاً بك. القائمة الرئيسية جاهزة:", reply_markup=markup)
 
 @bot.message_handler(func=lambda message: True)
-def handle_text(message):
+def handle_messages(message):
     user_id = message.from_user.id
     text = message.text
     data = load_data()
     
+    # التعامل مع حالات التعديل والإضافة للمشرف
     if is_admin(user_id) and user_id in admin_states:
         state = admin_states[user_id]
-        action = state["action"]
-        path = state["path"]
         
-        # الوصول للعقدة المستهدفة في شجرة البيانات
-        current = data["root"]
-        if path != "root":
-            for key in path.split("/")[1:]:
-                current = current["submenus"][key]
-                
-        if action == "add_sub":
-            if text not in current["submenus"]:
-                current["submenus"][text] = {"name": text, "submenus": {}, "files": []}
-                save_data(data)
-                del admin_states[user_id]
-                markup, _ = get_menu_markup(path, user_id)
-                bot.send_message(message.chat.id, f"✅ **تأكيد التعديل**: تم إضافة القسم '{text}' بنجاح وتحديث القوائم!", reply_markup=markup)
-            else:
-                bot.send_message(message.chat.id, "❌ هذا القسم موجود مسبقاً، أرسل اسماً آخر:")
-                
-        elif action == "del_sub":
-            if text in current["submenus"]:
-                del current["submenus"][text]
-                save_data(data)
-                del admin_states[user_id]
-                markup, _ = get_menu_markup(path, user_id)
-                bot.send_message(message.chat.id, f"🗑️ **تأكيد الحذف**: تم إزالة القسم '{text}' بنجاح!", reply_markup=markup)
-            else:
-                bot.send_message(message.chat.id, "❌ القسم غير موجود، تأكد من الاسم وأعد المحاولة:")
-                
-        elif action == "add_content":
-            if "files" not in current:
-                current["files"] = []
-            current["files"].append(text)
+        if state == "waiting_add_button":
+            data["buttons"].append(text)
             save_data(data)
             del admin_states[user_id]
-            markup, _ = get_menu_markup(path, user_id)
-            bot.send_message(message.chat.id, f"✅ **تأكيد حفظ التعديل**: تم إضافة ورسملة المحتوى للقسم بنجاح وتحديث واجهة العرض!", reply_markup=markup)
+            markup = get_dynamic_keyboard(user_id)
+            bot.send_message(message.chat.id, f"✅ تم إضافة الزر '{text}' بنجاح وتحديث القائمة السفلية!", reply_markup=markup)
+            return
+            
+        elif state == "waiting_delete_button":
+            if text in data["buttons"]:
+                data["buttons"].remove(text)
+                if text in data["content"]:
+                    del data["content"][text]
+                save_data(data)
+                del admin_states[user_id]
+                markup = get_dynamic_keyboard(user_id)
+                bot.send_message(message.chat.id, f"🗑️ تم حذف الزر '{text}' بنجاح وتحديث القائمة!", reply_markup=markup)
+            else:
+                bot.send_message(message.chat.id, "❌ اسم الزر غير موجود، أرسل اسماً صحيحاً للحذف:")
+            return
+            
+        elif state == "waiting_content_section":
+            admin_states[user_id] = {"state": "saving_content", "section": text}
+            bot.send_message(message.chat.id, f"📝 أرسل الآن المحتوى أو الرسالة للقسم: ({text})")
+            return
+            
+        elif isinstance(state, dict) and state.get("state") == "saving_content":
+            section = state["section"]
+            data["content"][section] = text
+            save_data(data)
+            del admin_states[user_id]
+            markup = get_dynamic_keyboard(user_id)
+            bot.send_message(message.chat.id, f"✅ **تأكيد حفظ التعديل**: تم حفظ محتوى القسم ({section}) بنجاح!", reply_markup=markup)
+            return
+
+    # الأوامر الرئيسية للمشرف عبر الأزرار السفلية
+    if text == "🎛️ محرر الأزرار" and is_admin(user_id):
+        admin_states[user_id] = "editor_mode"
+        bot.send_message(message.chat.id, "أنت الآن في وضع **تعديل الأزرار**. استخدم خيارات الإضافة أو الحذف بالأسفل.")
+        return
+        
+    elif text == "📝 تعديل المشاركات (المحتوى)" and is_admin(user_id):
+        if not data["buttons"]:
+            bot.send_message(message.chat.id, "⚠️ لا توجد أزرار أو أقسام مضافة بعد لتعديل محتواها.")
+            return
+        admin_states[user_id] = "waiting_content_section"
+        buttons_list = "\n".join([f"- {b}" for b in data["buttons"]])
+        bot.send_message(message.chat.id, f"أنت في وضع **تعديل الرسائل**.\nأرسل اسم القسم من القائمة أدناه لتعديله:\n\n{buttons_list}")
+        return
+        
+    elif text == "➕ إضافة زر" and is_admin(user_id):
+        admin_states[user_id] = "waiting_add_button"
+        bot.send_message(message.chat.id, "✏️ أرسل اسم الزر أو القسم الجديد الذي تريد إضافته للقائمة السفلية:")
+        return
+        
+    elif text == "🗑️ حذف زر" and is_admin(user_id):
+        if not data["buttons"]:
+            bot.send_message(message.chat.id, "القائمة فارغة أساساً.")
+            return
+        admin_states[user_id] = "waiting_delete_button"
+        bot.send_message(message.chat.id, "🗑️ أرسل اسم الزر الموجود حالياً في القائمة والذي تريد حذفه:")
+        return
+        
+    elif text == "🔴 إيقاف المحرر (التعديل)" and is_admin(user_id):
+        if user_id in admin_states:
+            del admin_states[user_id]
+        markup = get_dynamic_keyboard(user_id)
+        bot.send_message(message.chat.id, "🔴 تم إيقاف وضع التحرير والعودة للقائمة الرئيسية.", reply_markup=markup)
+        return
+
+    # عرض محتوى الأقسام عند الضغط عليها من الأزرار السفلية
+    if text in data["content"]:
+        bot.send_message(message.chat.id, data["content"][text])
+    elif text in data["buttons"]:
+        bot.send_message(message.chat.id, f"📁 القسم: {text}\n(لا توجد رسائل مضافة لهذا القسم حتى الآن).")
+    else:
+        bot.send_message(message.chat.id, "اختر من الأزرار الظاهرة في الأسفل أو استخدم /start لإعادة تحميل القائمة.")
 
 if __name__ == "__main__":
-    print("البوت يعمل بنظام القوائم الهرمية التفاعلية وصلاحيات الإدارة الشاملة...")
+    print("البوت يعمل بنظام الأزرار السفلية التفاعلية...")
     bot.remove_webhook()
     bot.infinity_polling(skip_pending=True)

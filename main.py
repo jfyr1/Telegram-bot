@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+from flask import Flask
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -49,7 +50,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for s_key, s_val in data["stages"].items():
         keyboard.append([InlineKeyboardButton(s_val["name"], callback_data=f'view_{s_key}')])
     
-    # خيارات خاصة للمسؤول فقط
     if update.effective_user.id == ADMIN_ID:
         keyboard.append([InlineKeyboardButton("➕ إضافة مرحلة جديدة", callback_data='add_stage')])
     
@@ -71,7 +71,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stage_info = data["stages"].get(stage_key)
         
         keyboard = []
-        # عرض الملفات إن وجدت
         for idx, file_info in enumerate(stage_info.get("files", [])):
             keyboard.append([InlineKeyboardButton(f"📄 {file_info['name']}", callback_data=f"get_file_{stage_key}_{idx}")])
         
@@ -91,13 +90,13 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == 'add_stage':
         if user_id == ADMIN_ID:
             context.user_data['state'] = 'waiting_for_stage_name'
-            await query.edit_message_text(text="أرسل الآن اسم المرحلة الجديدة (مثال: المرحلة الرابعة):")
+            await query.edit_message_text(text="أرسل الآن اسم المرحلة الجديدة:")
 
     elif query.data.startswith('upload_'):
         if user_id == ADMIN_ID:
             stage_key = query.data.split('_')[1]
             context.user_data['state'] = f'waiting_for_file_{stage_key}'
-            await query.edit_message_text(text="الرجاء إرسال الملف (مستند/PDF) الآن، وسيتم حفظه مع اسم تضعه له.")
+            await query.edit_message_text(text="الرجاء إرسال الملف (مستند/PDF) الآن:")
 
     elif query.data.startswith('rename_'):
         if user_id == ADMIN_ID:
@@ -166,7 +165,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del context.user_data['state']
         await update.message.reply_text(f"تم حفظ الملف باسم: {file_name} في المرحلة بنجاح.")
 
+# إنشاء خادم ويب وهمي لكي يتوافق مع متطلبات المنصات مثل Render
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
+
 if __name__ == '__main__':
+    from threading import Thread
+    # تشغيل خادم الويب في خيط منفصل
+    t = Thread(target=run_web)
+    t.start()
+
     application = ApplicationBuilder().token('8925599691:AAHIGxwCVTb5hYQ-bCWKVS7-u__xduob...').build()
 
     application.add_handler(CommandHandler('start', start))

@@ -4,7 +4,8 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ضع التوكن الخاص بك هنا
-TOKEN = "YOUR_BOT_TOKEN_HERE"
+TOKEN = "8925599691:AAHIGxwCVTb5hYQ-bCWKVS7-u__xduobniE
+"
 bot = telebot.TeleBot(TOKEN)
 
 ADMIN_ID = 5734654153

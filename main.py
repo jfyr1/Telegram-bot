@@ -1,27 +1,17 @@
 import os
 import json
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
-# ضع التوكن الخاص بك هنا
-TOKEN = "8925599691:AAHIGxwCVTb5hYQ-bCWKVS7-u__xduobniE"
+TOKEN = "ضع_التوكن_الجديد_هنا"
 bot = telebot.TeleBot(TOKEN)
-
 ADMIN_ID = 5734654153
 
 def load_data():
     if os.path.exists("bot_data.json"):
         with open("bot_data.json", 'r', encoding='utf-8') as f:
             return json.load(f)
-    return {
-        "menu": {
-            "root": {
-                "name": "القائمة الرئيسية",
-                "submenus": {},
-                "files": []
-            }
-        }
-    }
+    return {"menu": {"root": {"name": "القائمة الرئيسية", "submenus": {}, "files": []}}}
 
 def save_data(data):
     with open("bot_data.json", 'w', encoding='utf-8') as f:
@@ -32,45 +22,36 @@ def is_admin(user_id):
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    data = load_data()
-    markup = InlineKeyboardMarkup()
+    user_id = message.from_user.id
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     
-    # بناء أزرار القائمة الرئيسية
-    markup.add(InlineKeyboardButton("📚 عرض المراحل الدراسية", callback_data="show_root"))
+    # أزرار المستخدم العادي
+    btn1 = KeyboardButton("📚 المراحل الدراسية")
+    btn2 = KeyboardButton("ℹ️ حول البوت")
+    markup.add(btn1, btn2)
     
-    if is_admin(message.from_user.id):
-        markup.add(InlineKeyboardButton("⚙️ لوحة تحكم المسؤول", callback_data="admin_panel"))
+    # أزرار تظهر فقط للمسؤول أسفل لوحة المفاتيح
+    if is_admin(user_id):
+        btn_admin1 = KeyboardButton("⚙️ إعدادات القوائم")
+        btn_admin2 = KeyboardButton("➕ إضافة قسم أو ملف")
+        markup.add(btn_admin1, btn_admin2)
         
-    bot.send_message(message.chat.id, "أهلاً بك في بوت المحاضرات والقوائم التعليمية.", reply_markup=markup)
+    bot.send_message(message.chat.id, "أهلاً بك! استخدم الأزرار بالأسفل للتنقل:", reply_markup=markup)
 
-@bot.callback_query_handler(func=lambda call: True)
-def handle_query(call):
-    data = load_data()
-    user_id = call.from_user.id
+@bot.message_handler(func=lambda message: True)
+def handle_messages(message):
+    user_id = message.from_user.id
+    text = message.text
     
-    if call.data == "show_root":
-        markup = InlineKeyboardMarkup()
-        root_menu = data["menu"]["root"]["submenus"]
-        
-        for key, value in root_menu.items():
-            markup.add(InlineKeyboardButton(value["name"], callback_data=f"submenu_{key}"))
-            
-        if is_admin(user_id):
-            markup.add(InlineKeyboardButton("➕ إضافة قسم رئيسي", callback_data="add_root"))
-            
-        bot.edit_message_text("اختر القسم أو المرحلة:", call.message.chat.id, call.message.message_id, reply_markup=markup)
+    if text == "📚 المراحل الدراسية":
+        bot.send_message(message.chat.id, "جاري عرض المراحل الدراسية...")
+    elif text == "⚙️ إعدادات القوائم" and is_admin(user_id):
+        bot.send_message(message.chat.id, "أنت الآن في لوحة تحكم المسؤول لتعديل القوائم.")
+    elif text == "➕ إضافة قسم أو ملف" and is_admin(user_id):
+        bot.send_message(message.chat.id, "أرسل تفاصيل القسم أو الملف الجديد للإضافة.")
+    else:
+        bot.send_message(message.chat.id, "اختر من الأزرار الموجودة في الأسفل.")
 
-    elif call.data == "admin_panel":
-        if not is_admin(user_id):
-            bot.answer_callback_query(call.id, "هذا الزر مخصص للمسؤول فقط!", show_alert=True)
-            return
-            
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("📁 إدارة الأقسام والقوائم", callback_data="manage_menus"))
-        markup.add(InlineKeyboardButton("🔙 رجوع", callback_data="show_root"))
-        bot.edit_message_text("أهلاً بك في لوحة تحكم المسؤول. اختر العملية المطلوبة:", call.message.chat.id, call.message.message_id, reply_markup=markup)
-
-# تشغيل البوت
 if __name__ == "__main__":
     print("البوت يعمل الآن...")
     bot.infinity_polling()

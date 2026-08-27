@@ -3,7 +3,8 @@ import json
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
-TOKEN = os.environ.get("BOT_TOKEN")
+# تم وضع التوكن مباشرة هنا لتجنب مشاكل القراءة على السيرفر
+TOKEN = "8925599691:AAEnU91zp05TD_PnZFb_DTmLZ8Ub_u5qzPM"
 bot = telebot.TeleBot(TOKEN)
 ADMIN_ID = 5734654153
 
@@ -33,7 +34,7 @@ def send_welcome(message):
     btn5 = KeyboardButton("💬 التواصل معنا")
     markup.add(btn1, btn2, btn3, btn4, btn5)
     
-    # الأزرار الخاصة بالمسؤول (تظهر فقط للـ ID الخاص بك)
+    # الأزرار الخاصة بالمسؤول
     if is_admin(user_id):
         btn_admin1 = KeyboardButton("🎛️ محرر الأزرار")
         btn_admin2 = KeyboardButton("📝 تعديل المشاركات (المحتوى)")
@@ -49,15 +50,15 @@ def handle_messages(message):
     text = message.text
     
     if text == "🎛️ محرر الأزرار" and is_admin(user_id):
-        bot.send_message(message.chat.id, "أنت الآن في وضع **محرر الأزرار**. أرسل اسم القسم الجديد أو اختر الزر المراد تعديله.")
+        bot.send_message(message.chat.id, "أنت الآن في وضع **محرر الأزرار**.")
     elif text == "📝 تعديل المشاركات (المحتوى)" and is_admin(user_id):
-        bot.send_message(message.chat.id, "أنت الآن في وضع **تعديل المحتوى (الملفات/الصور/الفيديوهات)**.")
+        bot.send_message(message.chat.id, "أنت الآن في وضع **تعديل المحتوى**.")
     elif text == "💰 الرصيد" and is_admin(user_id):
-        bot.send_message(message.chat.id, "الرصيد الحالي: معلومات حساب المسؤول.")
+        bot.send_message(message.chat.id, "الرصيد الحالي للمسؤول.")
     elif text == "🔓 Admin" and is_admin(user_id):
-        bot.send_message(message.chat.id, "لوحة صلاحيات المسؤول مفعلة بالكامل.")
+        bot.send_message(message.chat.id, "لوحة صلاحيات المسؤول مفعلة.")
     else:
-        bot.send_message(message.chat.id, "تم تلقي طلبك. استخدم الأزرار الظاهرة في الأسفل للتنقل.")
+        bot.send_message(message.chat.id, "اختر من الأزرار الموجودة في الأسفل.")
 
 if __name__ == "__main__":
     print("البوت يعمل الآن...")

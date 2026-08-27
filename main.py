@@ -1,7 +1,7 @@
 import os
 import json
 import telebot
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
 TOKEN = "8925599691:AAEnU91zp05TD_PnZFb_DTmLZ8Ub_u5qzPM"
 bot = telebot.TeleBot(TOKEN)
@@ -9,7 +9,6 @@ ADMIN_ID = 5734654153
 
 DATA_FILE = "bot_data.json"
 
-# هيكل البيانات الافتراضي
 def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, 'r', encoding='utf-8') as f:
@@ -29,7 +28,6 @@ def save_data(data):
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
-# قاموس مؤقت لتتبع حالة المسؤول (إضافة، تعديل، حذف)
 admin_states = {}
 
 @bot.message_handler(commands=['start'])
@@ -39,11 +37,9 @@ def send_welcome(message):
     
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     
-    # إضافة الأزرار المخزنة ديناميكياً
     for btn_text in data["buttons"]:
         markup.add(KeyboardButton(btn_text))
     
-    # أزرار لوحة التحكم الخاصة بالمشرف
     if is_admin(user_id):
         markup.add(KeyboardButton("🎛️ محرر الأزرار"), KeyboardButton("📝 تعديل المشاركات (المحتوى)"))
         markup.add(KeyboardButton("💰 الرصيد"), KeyboardButton("🔓 Admin"))
@@ -56,7 +52,6 @@ def handle_messages(message):
     text = message.text
     data = load_data()
     
-    # التحقق من حالات المشرف التفاعلية
     if is_admin(user_id) and user_id in admin_states:
         state = admin_states[user_id]
         
@@ -74,12 +69,12 @@ def handle_messages(message):
                 del admin_states[user_id]
                 bot.send_message(message.chat.id, f"🗑️ تم حذف الزر '{text}' بنجاح! اضغط /start لتحديث القائمة.")
             else:
-                bot.send_message(message.chat.id, "❌ اسم الزر غير موجود في القائمة. أرسل اسم الزر الصحيح للحذف:")
+                bot.send_message(message.chat.id, "❌ اسم الزر غير موجود. أرسل اسم الزر الصحيح للحذف:")
             return
 
         elif state == "waiting_content_section":
             admin_states[user_id] = {"state": "waiting_content_text", "section": text}
-            bot.send_message(message.chat.id, f"📝 أرسل الآن الرسالة أو المحتوى الذي تريد إضافته للقسم: ({text})")
+            bot.send_message(message.chat.id, f"📝 أرسل الآن الرسالة أو المحتوى للقسم: ({text})")
             return
 
         elif isinstance(state, dict) and state.get("state") == "waiting_content_text":
@@ -90,7 +85,6 @@ def handle_messages(message):
             bot.send_message(message.chat.id, f"✅ تم حفظ المحتوى بنجاح للقسم: {section}")
             return
 
-    # الأوامر الرئيسية للمشرف
     if text == "🎛️ محرر الأزرار" and is_admin(user_id):
         markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
         markup.add(KeyboardButton("➕ إضافة زر جديد"), KeyboardButton("🗑️ حذف زر"), KeyboardButton("🔙 رجوع للقائمة الرئيسية"))
@@ -100,17 +94,17 @@ def handle_messages(message):
     elif text == "📝 تعديل المشاركات (المحتوى)" and is_admin(user_id):
         admin_states[user_id] = "waiting_content_section"
         buttons_list = "\n".join([f"- {b}" for b in data["buttons"]])
-        bot.send_message(message.chat.id, f"📝 **تعديل المحتوى**:\nالرجاء إرسال اسم القسم أو الزر الذي تريد إضافة رسالة أو محتوى له من القائمة أدناه:\n\n{buttons_list}")
+        bot.send_message(message.chat.id, f"📝 **تعديل المحتوى**:\nأرسل اسم القسم أو الزر الذي تريد إضافة محتوى له:\n\n{buttons_list}")
         return
 
     elif text == "➕ إضافة زر جديد" and is_admin(user_id):
         admin_states[user_id] = "waiting_add_button"
-        bot.send_message(message.chat.id, "✏️ أرسل الآن اسم الزر أو القسم الجديد الذي تريد إضافته:")
+        bot.send_message(message.chat.id, "✏️ أرسل الآن اسم الزر الجديد:")
         return
 
     elif text == "🗑️ حذف زر" and is_admin(user_id):
         admin_states[user_id] = "waiting_delete_button"
-        bot.send_message(message.chat.id, "🗑️ أرسل اسم الزر الموجود حالياً الذي تريد حذفه:")
+        bot.send_message(message.chat.id, "🗑️ أرسل اسم الزر الذي تريد حذفه:")
         return
 
     elif text == "🔙 رجوع للقائمة الرئيسية":
@@ -120,19 +114,20 @@ def handle_messages(message):
         return
 
     elif text == "💰 الرصيد" and is_admin(user_id):
-        bot.send_message(message.chat.id, "💰 الرصيد الحالي للمسؤول: 0 (مجاني).")
+        bot.send_message(message.chat.id, "💰 الرصيد الحالي للمسؤول: مجاني.")
         return
 
     elif text == "🔓 Admin" and is_admin(user_id):
-        bot.send_message(message.chat.id, "🔓 لوحة صلاحيات المسؤول مفعلة بالكامل.")
+        bot.send_message(message.chat.id, "🔓 لوحة صلاحيات المسؤول مفعلة.")
         return
 
-    # عرض المحتوى المخزن إذا قام المستخدم بالضغط على زر القسم
     if text in data["content"]:
         bot.send_message(message.chat.id, data["content"][text])
     else:
-        bot.send_message(message.chat.id, f"📁 أنت تتصفح: {text}\n(لا توجد رسائل مضافة لهذا القسم حتى الآن).")
+        bot.send_message(message.chat.id, f"📁 أنت تتصفح: {text}\n(لا توجد رسائل مضافة لهذا القسم بعد).")
 
 if __name__ == "__main__":
-    print("البوت يعمل الآن بنظام البيانات التفاعلي...")
-    bot.infinity_polling()
+    print("البوت يعمل الآن...")
+    # إزالة أي اتصال قديم معلق وإجبار البوت على العمل بنظافة
+    bot.remove_webhook()
+    bot.infinity_polling(skip_pending=True)

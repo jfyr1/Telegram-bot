@@ -30,7 +30,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text="المرحلة الثانية قيد التحديث.")
 
 if name == '__main__':
-    application = ApplicationBuilder().token('8925599691:AAHIGxwCVTb5hYQ-bCWKVS7-u__xduobniE
+    application = ApplicationBuilder().token('8925599691:AAHIGxwCVTb5hYQ-bCWKVS7-u__xduobniE')
 ').build()
 
     start_handler = CommandHandler('start', start)

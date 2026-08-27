@@ -182,7 +182,8 @@ if __name__ == '__main__':
     t = Thread(target=run_web)
     t.start()
 
-    application = ApplicationBuilder().token('8925599691:AAHIGxwCVTb5hYQ-bCWKVS7-u__xduob...').build()
+    application = ApplicationBuilder().token('8925599691:AAHIGxwCVTb5hYQ-bCWKVS7-u__xduobniE')
+...').build()
 
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CallbackQueryHandler(button))

@@ -14,4 +14,4 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-TOKEN = "8925599691:AAGvo1qs6akZrIE-uVbcfhMfOVlju1Pzp
+TOKEN = ("8925599691:AAGvo1qs6akZrIE-uVbcfhMfOVlju1Pzp")

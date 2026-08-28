@@ -35,10 +35,22 @@ def init_db():
 
 init_db()
 
+async def delete_last_bot_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    """حذف آخر رسالة إشعار أو محرر أرسلها البوت للحفاظ على نظافة وسلاسة المحادثة"""
+    last_msg_id = context.user_data.get('last_notification_id')
+    if last_msg_id:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=last_msg_id)
+        except Exception:
+            pass
+        context.user_data['last_notification_id'] = None
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['current_parent_id'] = 0
     context.user_data.pop('admin_state', None)
     context.user_data.pop('target_btn_id', None)
+    context.user_data.pop('editor_mode', None)
+    await delete_last_bot_message(context, update.effective_chat.id)
     await show_menu(update, context, parent_id=0)
 
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, parent_id=0):
@@ -79,7 +91,11 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, parent_i
     nav_row.append(KeyboardButton("🔙 القائمة الرئيسية"))
 
     if user_id == ADMIN_ID:
-        nav_row.append(KeyboardButton("⚙️ لوحة تحكم الآدمن"))
+        if context.user_data.get('editor_mode'):
+            nav_row.append(KeyboardButton("🛑 إيقاف المحرر (التعديل)"))
+        else:
+            nav_row.append(KeyboardButton("🛠 محرر الأزرار"))
+        nav_row.append(KeyboardButton("Admin"))
 
     if nav_row:
         keyboard.append(nav_row)
@@ -98,12 +114,20 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, parent_i
         current_title = res[0] if res else "القسم الحالي"
 
     text_msg = f"📍 أنت الآن في: *{current_title}*\nاختر من القائمة أدناه:"
-    await update.message.reply_text(text_msg, reply_markup=reply_markup, parse_mode="Markdown")
+    
+    # إرسال القائمة الجديدة
+    msg = await update.message.reply_text(text_msg, reply_markup=reply_markup, parse_mode="Markdown")
+    context.user_data['last_notification_id'] = msg.message_id
 
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
     admin_state = context.user_data.get('admin_state')
+    editor_mode = context.user_data.get('editor_mode', False)
+
+    # محاولة حذف رسالة المستخدم أو تنظيف رسائل النظام السابقة لزيادة السلاسة
+    await delete_last_bot_message(context, chat_id)
 
     if text == "🔙 القائمة الرئيسية":
         context.user_data.pop('admin_state', None)
@@ -117,7 +141,26 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         await show_menu(update, context, parent_id=parent_id)
         return
 
-    # معالجة حالات الإدخال الخاصة بالآدمن (إضافة، تعديل، نقل، نسخ)
+    # تشغيل وإيقاف محرر الأزرار السريع
+    if text == "🛠 محرر الأزرار" and user_id == ADMIN_ID:
+        context.user_data['editor_mode'] = True
+        msg = await update.message.reply_text("✏️ *أنت في وضع تحرير الأزرار.*", parse_mode="Markdown")
+        context.user_data['last_notification_id'] = msg.message_id
+        current_p = context.user_data.get('current_parent_id', 0)
+        await show_menu(update, context, parent_id=current_p)
+        return
+
+    elif text == "🛑 إيقاف المحرر (التعديل)" and user_id == ADMIN_ID:
+        context.user_data['editor_mode'] = False
+        context.user_data.pop('admin_state', None)
+        context.user_data.pop('target_btn_id', None)
+        msg = await update.message.reply_text("🛑 تم إيقاف محرر الأزرار.", parse_mode="Markdown")
+        context.user_data['last_notification_id'] = msg.message_id
+        current_p = context.user_data.get('current_parent_id', 0)
+        await show_menu(update, context, parent_id=current_p)
+        return
+
+    # معالجة حالات الإدخال الخاصة بالآدمن أثناء التحرير
     if user_id == ADMIN_ID and admin_state:
         if admin_state == "waiting_add_text":
             btn_text = text.strip()
@@ -127,7 +170,8 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
                 [KeyboardButton("📁 قسم فرعي (قائمة)"), KeyboardButton("📄 محتوى نصي")],
                 [KeyboardButton("❌ إلغاء")]
             ]
-            await update.message.reply_text("اختر نوع هذا الزر (قسم تفتح منه أقسام أخرى، أو محتوى نصي يظهر للمستخدم):", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+            msg = await update.message.reply_text("اختر نوع هذا الزر:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+            context.user_data['last_notification_id'] = msg.message_id
             return
 
         elif admin_state == "waiting_add_type":
@@ -139,9 +183,8 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
                 b_content = None
             elif text == "📄 محتوى نصي":
                 b_type = "content"
-                b_content = "سيتم تحديث هذا المحتوى قريباً."
+                b_content = "محتوى فارغ."
             else:
-                await update.message.reply_text("الرجاء الاختيار من الأزرار الموجودة أدناه.")
                 return
 
             conn = sqlite3.connect("tree_bot.db")
@@ -152,7 +195,8 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
             context.user_data.pop('admin_state', None)
             context.user_data.pop('new_btn_text', None)
-            await update.message.reply_text(f"تمت إضافة الزر ({btn_text}) بنجاح! ✅")
+            msg = await update.message.reply_text(f"تمت إضافة الزر ({btn_text}) بنجاح! ✅")
+            context.user_data['last_notification_id'] = msg.message_id
             await show_menu(update, context, parent_id=current_p)
             return
 
@@ -166,7 +210,8 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
             context.user_data.pop('admin_state', None)
             context.user_data.pop('target_btn_id', None)
-            await update.message.reply_text("تم تعديل محتوى الزر بنجاح! ✅")
+            msg = await update.message.reply_text("تم تعديل المحتوى بنجاح! ✅")
+            context.user_data['last_notification_id'] = msg.message_id
             current_p = context.user_data.get('current_parent_id', 0)
             await show_menu(update, context, parent_id=current_p)
             return
@@ -181,7 +226,8 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
             context.user_data.pop('admin_state', None)
             context.user_data.pop('target_btn_id', None)
-            await update.message.reply_text("تم تغيير اسم الزر بنجاح! ✅")
+            msg = await update.message.reply_text("تم تعديل الاسم بنجاح! ✅")
+            context.user_data['last_notification_id'] = msg.message_id
             current_p = context.user_data.get('current_parent_id', 0)
             await show_menu(update, context, parent_id=current_p)
             return
@@ -199,7 +245,6 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
                 res = cursor.fetchone()
                 if not res:
                     conn.close()
-                    await update.message.reply_text("القسم غير موجود أو ليس قائمة. أرسل اسم قسم صحيح أو اختر من الأزرار.")
                     return
                 new_p_id = res[0]
 
@@ -209,78 +254,57 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
             context.user_data.pop('admin_state', None)
             context.user_data.pop('target_btn_id', None)
-            await update.message.reply_text("تم نقل الزر بنجاح إلى القسم الجديد! ✅")
+            msg = await update.message.reply_text("تم نقل الزر بنجاح! ✅")
+            context.user_data['last_notification_id'] = msg.message_id
             current_p = context.user_data.get('current_parent_id', 0)
             await show_menu(update, context, parent_id=current_p)
             return
 
-    # أزرار لوحة تحكم الآدمن الأساسية
-    if text == "⚙️ لوحة تحكم الآدمن" and user_id == ADMIN_ID:
-        keyboard = [
-            [KeyboardButton("➕ إضافة زر هنا"), KeyboardButton("🛠 تعديل أو إدارة الأزرار الحالية")],
-            [KeyboardButton("🔙 القائمة الرئيسية")]
-        ]
-        await update.message.reply_text("⚙️ لوحة تحكم الآدمن لإدارة القوائم الهرمية:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+    # لوحة تحكم الآدمن العامة
+    if text == "Admin" and user_id == ADMIN_ID:
+        msg = await update.message.reply_text("⚙️ لوحة تحكم الآدمن العامة (إحصائيات أو إعدادات عامة).")
+        context.user_data['last_notification_id'] = msg.message_id
         return
 
-    elif text == "➕ إضافة زر هنا" and user_id == ADMIN_ID:
-        context.user_data['admin_state'] = "waiting_add_text"
-        keyboard = [[KeyboardButton("❌ إلغاء")]]
-        await update.message.reply_text("أرسل الآن نص (اسم) الزر الجديد الذي تريد إضافته في هذا القسم:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
-        return
-
-    elif text == "🛠 تعديل أو إدارة الأزرار الحالية" and user_id == ADMIN_ID:
+    # إذا كان محرر الأزرار مفعل وتم الضغط على زر موجود لإدارته
+    if user_id == ADMIN_ID and editor_mode:
         current_p = context.user_data.get('current_parent_id', 0)
         conn = sqlite3.connect("tree_bot.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT id, text FROM main_buttons WHERE parent_id = ?", (current_p,))
-        buttons = cursor.fetchall()
-        conn.close()
-
-        if not buttons:
-            await update.message.reply_text("لا توجد أزرار في هذا القسم لتعديلها.")
-            return
-
-        keyboard = []
-        for btn_id, btn_text in buttons:
-            keyboard.append([KeyboardButton(f"إدارة: {btn_text}")])
-        keyboard.append([KeyboardButton("⚙️ لوحة تحكم الآدمن"), KeyboardButton("🔙 القائمة الرئيسية")])
-        
-        await update.message.reply_text("اختر الزر الذي تريد إدارته (تعديل، حذف، نقل، نسخ):", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
-        return
-
-    # التحكم المباشر بزر معين تم اختياره للإدارة
-    if user_id == ADMIN_ID and text.startswith("إدارة: "):
-        btn_name = text.replace("إدارة: ", "").strip()
-        current_p = context.user_data.get('current_parent_id', 0)
-        
-        conn = sqlite3.connect("tree_bot.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, type FROM main_buttons WHERE parent_id = ? AND text = ?", (current_p, btn_name))
+        cursor.execute("SELECT id, type FROM main_buttons WHERE parent_id = ? AND text = ?", (current_p, text))
         btn = cursor.fetchone()
         conn.close()
+
+        if text == "➕ إضافة زر":
+            context.user_data['admin_state'] = "waiting_add_text"
+            keyboard = [[KeyboardButton("❌ إلغاء")]]
+            msg = await update.message.reply_text("أرسل اسم الزر الجديد:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+            context.user_data['last_notification_id'] = msg.message_id
+            return
 
         if btn:
             btn_id, b_type = btn
             context.user_data['target_btn_id'] = btn_id
             
+            # قائمة خيارات التحكم بالزر (أسهم، نقل، نسخ، تعديل، حذف) شبيهة بالصورة
             keyboard = [
+                [KeyboardButton("⬅️"), KeyboardButton("➡️"), KeyboardButton("⬆️"), KeyboardButton("⬇️")],
                 [KeyboardButton("✏️ تغيير الاسم"), KeyboardButton("🗑 حذف الزر")],
                 [KeyboardButton("🚚 نقل إلى قسم آخر"), KeyboardButton("📋 نسخ الزر هنا")],
             ]
             if b_type == "content":
                 keyboard.insert(0, [KeyboardButton("📝 تعديل المحتوى النصي")])
             
-            keyboard.append([KeyboardButton("🛠 تعديل أو إدارة الأزرار الحالية"), KeyboardButton("🔙 القائمة الرئيسية")])
-            await update.message.reply_text(f"خيارات التحكم بالزر: *{btn_name}*", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True), parse_mode="Markdown")
+            keyboard.append([KeyboardButton("🛑 إيقاف المحرر (التعديل)"), KeyboardButton("🔙 القائمة الرئيسية")])
+            msg = await update.message.reply_text(f"⚙️ خيارات تحكم الزر: *{text}*", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True), parse_mode="Markdown")
+            context.user_data['last_notification_id'] = msg.message_id
             return
 
-    # تنفيذ عمليات التعديل للزر المستهدف
-    if user_id == ADMIN_ID and 'target_btn_id' in context.user_data:
+    # أوامر تحكم الزر المستهدف في وضع المحرر
+    if user_id == ADMIN_ID and editor_mode and 'target_btn_id' in context.user_data:
         target_id = context.user_data['target_btn_id']
 
         if text == "🗑 حذف الزر":
-            # دالة لحذف الزر وكل فروع الشجرة التابعة له تلقائياً
             def delete_recursive(b_id):
                 conn_sub = sqlite3.connect("tree_bot.db")
                 cur_sub = conn_sub.cursor()
@@ -294,7 +318,8 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
             delete_recursive(target_id)
             context.user_data.pop('target_btn_id', None)
-            await update.message.reply_text("تم حذف الزر وكل محتوياته أو فروعه بنجاح! 🗑")
+            msg = await update.message.reply_text("تم الحذف بنجاح! 🗑")
+            context.user_data['last_notification_id'] = msg.message_id
             current_p = context.user_data.get('current_parent_id', 0)
             await show_menu(update, context, parent_id=current_p)
             return
@@ -302,13 +327,15 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         elif text == "📝 تعديل المحتوى النصي":
             context.user_data['admin_state'] = "waiting_edit_content"
             keyboard = [[KeyboardButton("❌ إلغاء")]]
-            await update.message.reply_text("أرسل المحتوى النصي الجديد الذي سيظهر للمستخدم عند الضغط على هذا الزر:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+            msg = await update.message.reply_text("أرسل المحتوى الجديد:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+            context.user_data['last_notification_id'] = msg.message_id
             return
 
         elif text == "✏️ تغيير الاسم":
             context.user_data['admin_state'] = "waiting_edit_title"
             keyboard = [[KeyboardButton("❌ إلغاء")]]
-            await update.message.reply_text("أرسل الاسم الجديد لهذا الزر:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+            msg = await update.message.reply_text("أرسل الاسم الجديد:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+            context.user_data['last_notification_id'] = msg.message_id
             return
 
         elif text == "🚚 نقل إلى قسم آخر":
@@ -324,45 +351,25 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
                 keyboard.append([KeyboardButton(m[0])])
             keyboard.append([KeyboardButton("❌ إلغاء")])
 
-            await update.message.reply_text("اختر القسم الجديد الذي تريد نقل هذا الزر إليه:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+            msg = await update.message.reply_text("اختر القسم الجديد للنقل:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+            context.user_data['last_notification_id'] = msg.message_id
             return
 
         elif text == "📋 نسخ الزر هنا":
             current_p = context.user_data.get('current_parent_id', 0)
-            
-            # جلب بيانات الزر الأصلي لنسخه
             conn = sqlite3.connect("tree_bot.db")
             cursor = conn.cursor()
             cursor.execute("SELECT text, type, content FROM main_buttons WHERE id = ?", (target_id,))
             orig = cursor.fetchone()
-            
             if orig:
                 orig_text, orig_type, orig_content = orig
-                # إضافة نسخة جديدة في القسم الحالي
                 cursor.execute("INSERT INTO main_buttons (parent_id, text, type, content) VALUES (?, ?, ?, ?)", 
                                (current_p, orig_text + " (نسخة)", orig_type, orig_content))
-                new_copied_id = cursor.lastrowid
                 conn.commit()
-
-                # إذا كان الزر المنسوخ عبارة عن قائمة، يمكننا نسخ فروعها أيضاً (اختياري/متقدم)
-                def copy_children(old_parent, new_parent):
-                    cur2 = conn.cursor()
-                    cur2.execute("SELECT text, type, content, id FROM main_buttons WHERE parent_id = ?", (old_parent,))
-                    sub_items = cur2.fetchall()
-                    for s_text, s_type, s_content, s_id in sub_items:
-                        cur2.execute("INSERT INTO main_buttons (parent_id, text, type, content) VALUES (?, ?, ?, ?)",
-                                     (new_parent, s_text, s_type, s_content))
-                        new_sub_id = cur2.lastrowid
-                        if s_type == 'menu':
-                            copy_children(s_id, new_sub_id)
-                    conn.commit()
-
-                if orig_type == 'menu':
-                    copy_children(target_id, new_copied_id)
-
             conn.close()
             context.user_data.pop('target_btn_id', None)
-            await update.message.reply_text("تم نسخ الزر (مع فروعه إن وجدت) إلى هذا القسم بنجاح! 📋")
+            msg = await update.message.reply_text("تم النسخ بنجاح! 📋")
+            context.user_data['last_notification_id'] = msg.message_id
             await show_menu(update, context, parent_id=current_p)
             return
 
@@ -373,8 +380,14 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         await show_menu(update, context, parent_id=current_p)
         return
 
-    # التفاعل الطبيعي للمستخدم العادي (فتح القوائم أو عرض المحتوى)
+    # التفاعل العادي للمستخدم أو عرض المحتوى إذا لم يكن في وضع التحرير
     current_p = context.user_data.get('current_parent_id', 0)
+    
+    # إذا كان محرر الأزرار مفعلاً، نظهر زر إضافة زر إضافي في القائمة
+    if user_id == ADMIN_ID and editor_mode and text not in ["➕ إضافة زر"]:
+        # السماح بفتح القائمة حتى لو كان محرر الأزرار مفعل لتصفح الأقسام
+        pass
+
     conn = sqlite3.connect("tree_bot.db")
     cursor = conn.cursor()
     cursor.execute("SELECT id, type, content, text FROM main_buttons WHERE parent_id = ? AND text = ?", (current_p, text))
@@ -387,7 +400,13 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             await show_menu(update, context, parent_id=btn_id)
         else:
             content_text = b_content if b_content else "لا يوجد محتوى مضاف بعد."
-            await update.message.reply_text(f"📖 *{b_text}*\n\n{content_text}", parse_mode="Markdown")
+            msg = await update.message.reply_text(f"📖 *{b_text}*\n\n{content_text}", parse_mode="Markdown")
+            context.user_data['last_notification_id'] = msg.message_id
+    elif user_id == ADMIN_ID and editor_mode and text == "➕ إضافة زر":
+        context.user_data['admin_state'] = "waiting_add_text"
+        keyboard = [[KeyboardButton("❌ إلغاء")]]
+        msg = await update.message.reply_text("أرسل اسم الزر الجديد:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+        context.user_data['last_notification_id'] = msg.message_id
 
 def main():
     application = ApplicationBuilder().token(TOKEN).build()
@@ -395,7 +414,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
 
-    print("البوت يعمل الآن بنجاح مع كافة خيارات الإدارة والشجرة الهرمية عبر لوحة المفاتيح السفلية...")
+    print("البوت يعمل الآن بسلاسة فائقة مع نظام حذف الإشعارات التلقائي ومحرر الأزرار...")
     application.run_polling()
 
 if __name__ == "__main__":

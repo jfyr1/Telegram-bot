@@ -17,7 +17,7 @@ logging.basicConfig(
 TOKEN = "8925599691:AAGvo1qs6akZrIE-uVbcfhMfOVlju1Pzp1s"
 ADMIN_ID = 5734654153
 
-# إعداد قاعدة البيانات الشجرية
+# إعداد قاعدة البيانات الشجرية المتكاملة
 def init_db():
     conn = sqlite3.connect("tree_bot.db")
     cursor = conn.cursor()
@@ -62,11 +62,10 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, parent_i
     if row:
         keyboard.append(row)
 
-    # لوحة التحكم الخاصة بالآدمن (إذا كان في وضع المحرر أو الوضع العادي)
     admin_mode = context.user_data.get('admin_mode', False)
 
+    # إذا كان الآدمن في وضع المحرر، تظهر لوحة التحكم الخاصة بالتعديل والأزرار الاحترافية
     if user_id == ADMIN_ID and admin_mode:
-        # لوحة أزرار المحرر المتقدمة مطابقة للفيديو
         keyboard.append([KeyboardButton("⬆️"), KeyboardButton("⬇️"), KeyboardButton("⬅️"), KeyboardButton("➡️"), KeyboardButton("❌"), KeyboardButton("➗")])
         keyboard.append([KeyboardButton("➕ إضافة زر"), KeyboardButton("➕ إضافة رسالة")])
         keyboard.append([KeyboardButton("🔄 نقل"), KeyboardButton("📋 نسخ"), KeyboardButton("🔀 دمج")])
@@ -106,9 +105,8 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, parent_i
         conn.close()
         current_title = res[0] if res else "القسم الحالي"
 
-    # إرسال رسالة الحالة مع الحفاظ على السلاسة وتحديث واجهة المستخدم
     if admin_mode:
-        status_text = f"⚙️ أنت في وضع تححرير الأزرار.\n📍 القسم الحالي: *{current_title}*"
+        status_text = f"⚙️ أنت في وضع تحرير الأزرار.\n📍 القسم الحالي: *{current_title}*"
     else:
         status_text = f"📍 أنت الآن في: *{current_title}*"
 
@@ -132,7 +130,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         await show_menu(update, context, parent_id=parent_id)
         return
 
-    # تفعيل أو إيقاف محرر الأزرار
+    # التحكم بتشغيل وإيقاف وضع المحرر
     if user_id == ADMIN_ID and text == "🛠 محرر الأزرار":
         context.user_data['admin_mode'] = True
         await update.message.reply_text("✏️ أنت في وضع تحرير الأزرار.", parse_mode="Markdown")
@@ -148,7 +146,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         await show_menu(update, context, parent_id=current_p)
         return
 
-    # معالجة إضافة زر أو رسالة جديدة
+    # استقبال أوامر الإضافة والتحرير ضمن وضع المحرر
     if user_id == ADMIN_ID and admin_mode:
         if text == "➕ إضافة زر":
             context.user_data['admin_state'] = "waiting_add_btn_name"
@@ -159,7 +157,6 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text("أرسل محتوى الرسالة النصية التي ستظهر عند الضغط هنا:")
             return
 
-    # حالات إدخال الآدمن
     if user_id == ADMIN_ID and admin_state:
         if admin_state == "waiting_add_btn_name":
             btn_name = text.strip()
@@ -191,7 +188,6 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             current_p = context.user_data.get('current_parent_id', 0)
             conn = sqlite3.connect("tree_bot.db")
             cursor = conn.cursor()
-            # تحديث محتوى آخر عنصر محتوى في هذا القسم أو بناءً على التحديد
             cursor.execute("UPDATE main_buttons SET content = ? WHERE parent_id = ? AND type = 'content'", (text, current_p))
             conn.commit()
             conn.close()
@@ -200,13 +196,12 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             await show_menu(update, context, parent_id=current_p)
             return
 
-    # تعديل مشاركات المحتوى
     if user_id == ADMIN_ID and text == "✏️ تعديل المشاركات (المحتوى)":
         context.user_data['admin_state'] = "waiting_edit_content"
         await update.message.reply_text("أرسل المحتوى أو التعديل الجديد ليتم حفظه في هذا القسم:")
         return
 
-    # التفاعل الطبيعي للمستخدم أو التنقل بين الأقسام الشجرية
+    # التفاعل الطبيعي للشجرة واختيار القوائم أو عرض المحتويات
     current_p = context.user_data.get('current_parent_id', 0)
     conn = sqlite3.connect("tree_bot.db")
     cursor = conn.cursor()
@@ -228,7 +223,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
 
-    print("البوت يعمل الآن بالهيكلية والشكل المطلوب تماماً...")
+    print("البوت يعمل بكفاءة تامة مع كافة خيارات التحرير والتنقل...")
     application.run_polling()
 
 if __name__ == "__main__":

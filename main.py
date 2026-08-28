@@ -10,8 +10,7 @@ from telegram.ext import (
     filters,
 )
 
-TOKEN = os.getenv("8925599691:AAGvo1qs6akZrIE-uVbcfhMfOVlju1Pzp1s")
-")
+TOKEN = "8925599691:AAGvo1qs6akZrIE-uVbcfhMfOVlju1Pzp1s"
 ADMIN_ID = 5734654153
 DB_NAME = "bot.db"
 

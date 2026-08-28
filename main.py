@@ -14,7 +14,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-TOKEN = "YOUR_TELEGRAM_BOT_TOKEN_HERE"  # استبدل بالتوكين الخاص بك
+TOKEN = "8925599691:AAGvo1qs6akZrIE-uVbcfhMfOVlju1Pzp1s"  # استبدل بالتوكين الخاص بك
 ADMIN_ID = 5734654153
 
 # إعداد قاعدة البيانات الشجرية

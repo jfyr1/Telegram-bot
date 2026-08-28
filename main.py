@@ -1,37 +1,29 @@
 import os
 import sqlite3
 import logging
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-)
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
-    CallbackQueryHandler,
     MessageHandler,
     ContextTypes,
     filters,
 )
 
-# =========================================================
-# إعدادات البوت
-# =========================================================
-
-TOKEN = os.getenv("BOT_TOKEN", "8925599691:AAGvo1qs6akZrIE-uVbcfhMfOVlju1Pzp1s")
+TOKEN = os.getenv("8925599691:AAGvo1qs6akZrIE-
+uVbcfhMfOVlju1Pzp1s
+")
 ADMIN_ID = 5734654153
-DB_NAME = "study_bot.db"
+DB_NAME = "bot.db"
 
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 
+
 # =========================================================
-# قاعدة البيانات
+# DATABASE
 # =========================================================
 
 def db():
@@ -44,31 +36,10 @@ def init_db():
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY,
+            user_id INTEGER PRIMARY KEY,
             first_name TEXT,
             username TEXT,
             joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS menus (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            parent_id INTEGER DEFAULT 0,
-            title TEXT NOT NULL,
-            position INTEGER DEFAULT 0
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS contents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            menu_id INTEGER,
-            title TEXT NOT NULL,
-            content_type TEXT DEFAULT 'text',
-            content TEXT,
-            file_id TEXT,
-            position INTEGER DEFAULT 0
         )
     """)
 
@@ -82,20 +53,76 @@ def init_db():
     conn.commit()
     conn.close()
 
+    defaults = {
+        "maintenance": "0",
+        "start_message": (
+            "👋 أهلاً وسهلاً بك في البوت\n\n"
+            "اختر من القائمة الرئيسية 👇"
+        ),
+        "maintenance_message": (
+            "🛠 البوت حالياً في وضع الصيانة.\n"
+            "يرجى المحاولة لاحقاً."
+        ),
+    }
+
+    conn = db()
+    cur = conn.cursor()
+
+    for key, value in defaults.items():
+        cur.execute(
+            "INSERT OR IGNORE INTO settings (key,value) VALUES (?,?)",
+            (key, value)
+        )
+
+    conn.commit()
+    conn.close()
+
 
 init_db()
 
+
 # =========================================================
-# تسجيل المستخدم
+# SETTINGS
+# =========================================================
+
+def get_setting(key):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT value FROM settings WHERE key=?",
+        (key,)
+    )
+    row = cur.fetchone()
+    conn.close()
+
+    return row[0] if row else ""
+
+
+def set_setting(key, value):
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT OR REPLACE INTO settings (key,value)
+        VALUES (?,?)
+    """, (key, value))
+
+    conn.commit()
+    conn.close()
+
+
+# =========================================================
+# SAVE USER
 # =========================================================
 
 def save_user(user):
+
     conn = db()
     cur = conn.cursor()
 
     cur.execute("""
         INSERT OR REPLACE INTO users
-        (id, first_name, username)
+        (user_id, first_name, username)
         VALUES (?, ?, ?)
     """, (
         user.id,
@@ -108,55 +135,99 @@ def save_user(user):
 
 
 # =========================================================
-# الكليشة الرئيسية
-# =========================================================
-
-WELCOME_TEXT = """
-👋 أهلاً وسهلاً بك في البوت الدراسي 📚
-
-🎓 منصتك التعليمية التي تجمع لك:
-📖 المحاضرات
-📝 الملخصات
-📚 الملازم والكتب
-❓ الأسئلة والمراجعات
-📂 الملفات الدراسية
-
-اختر من القائمة أدناه للوصول إلى المحتوى الذي تحتاجه.
-
-🚀 بالتوفيق والنجاح الدائم ❤️
-"""
-
-# =========================================================
-# إعداد القائمة الرئيسية
+# MAIN KEYBOARD
 # =========================================================
 
 def main_keyboard(user_id):
 
-    keyboard = [
+    buttons = [
         [
-            InlineKeyboardButton("📚 المواد الدراسية", callback_data="materials"),
-            InlineKeyboardButton("📖 المحاضرات", callback_data="lectures"),
+            KeyboardButton("📚 المواد الدراسية"),
+            KeyboardButton("📖 المحاضرات")
         ],
         [
-            InlineKeyboardButton("📝 الملخصات", callback_data="summaries"),
-            InlineKeyboardButton("📚 الملازم والكتب", callback_data="books"),
+            KeyboardButton("📝 الملخصات"),
+            KeyboardButton("📂 الملفات")
         ],
         [
-            InlineKeyboardButton("❓ الأسئلة", callback_data="questions"),
-            InlineKeyboardButton("🔍 البحث", callback_data="search"),
-        ],
+            KeyboardButton("❓ الأسئلة"),
+            KeyboardButton("🔍 البحث")
+        ]
     ]
 
     if user_id == ADMIN_ID:
-        keyboard.append([
-            InlineKeyboardButton("⚙️ لوحة التحكم", callback_data="admin")
+        buttons.append([
+            KeyboardButton("⚙️ لوحة الأدمن")
         ])
 
-    return InlineKeyboardMarkup(keyboard)
+    return ReplyKeyboardMarkup(
+        buttons,
+        resize_keyboard=True,
+        is_persistent=True
+    )
 
 
 # =========================================================
-# /start
+# ADMIN KEYBOARD
+# =========================================================
+
+def admin_keyboard():
+
+    return ReplyKeyboardMarkup(
+        [
+            [
+                KeyboardButton("📊 إحصائيات البوت"),
+                KeyboardButton("👥 عدد المشتركين")
+            ],
+            [
+                KeyboardButton("📢 إرسال جماعي"),
+                KeyboardButton("📣 الإعلانات")
+            ],
+            [
+                KeyboardButton("⚙️ إعدادات البوت"),
+                KeyboardButton("🛠 وضع الصيانة")
+            ],
+            [
+                KeyboardButton("✏️ رسالة البدء"),
+                KeyboardButton("🔧 رسالة الصيانة")
+            ],
+            [
+                KeyboardButton("👮 إعداد المشرفين"),
+                KeyboardButton("📢 قنوات ومجموعات")
+            ],
+            [
+                KeyboardButton("🏠 القائمة الرئيسية")
+            ]
+        ],
+        resize_keyboard=True,
+        is_persistent=True
+    )
+
+
+# =========================================================
+# SETTINGS KEYBOARD
+# =========================================================
+
+def settings_keyboard():
+
+    return ReplyKeyboardMarkup(
+        [
+            [
+                KeyboardButton("✏️ تعديل رسالة البدء")
+            ],
+            [
+                KeyboardButton("🛠 تعديل رسالة الصيانة")
+            ],
+            [
+                KeyboardButton("🔙 رجوع")
+            ]
+        ],
+        resize_keyboard=True
+    )
+
+
+# =========================================================
+# START
 # =========================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -166,674 +237,50 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data.clear()
 
+    maintenance = get_setting("maintenance")
+
+    if maintenance == "1" and user.id != ADMIN_ID:
+
+        await update.message.reply_text(
+            get_setting("maintenance_message"),
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton("🔄 تحديث")]],
+                resize_keyboard=True
+            )
+        )
+        return
+
     await update.message.reply_text(
-        WELCOME_TEXT,
+        get_setting("start_message"),
         reply_markup=main_keyboard(user.id)
     )
 
 
 # =========================================================
-# القائمة الرئيسية
+# ADMIN PANEL
 # =========================================================
 
-async def home(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    query = update.callback_query
-
-    if query:
-        await query.answer()
-
-        await query.edit_message_text(
-            WELCOME_TEXT,
-            reply_markup=main_keyboard(query.from_user.id)
-        )
-
-    else:
-        await update.message.reply_text(
-            WELCOME_TEXT,
-            reply_markup=main_keyboard(update.effective_user.id)
-        )
-
-
-# =========================================================
-# عرض المواد
-# =========================================================
-
-async def show_materials(query):
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT id, title
-        FROM menus
-        WHERE parent_id = 0
-        ORDER BY position, id
-    """)
-
-    rows = cur.fetchall()
-    conn.close()
-
-    keyboard = []
-
-    for menu_id, title in rows:
-        keyboard.append([
-            InlineKeyboardButton(
-                f"📚 {title}",
-                callback_data=f"menu:{menu_id}"
-            )
-        ])
-
-    keyboard.append([
-        InlineKeyboardButton("🔙 رجوع", callback_data="home")
-    ])
-
-    if not rows:
-        text = "📚 لا توجد مواد مضافة حالياً."
-    else:
-        text = "📚 اختر المادة الدراسية:"
-
-    await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-
-# =========================================================
-# عرض قائمة
-# =========================================================
-
-async def show_menu(query, menu_id):
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute(
-        "SELECT title, parent_id FROM menus WHERE id = ?",
-        (menu_id,)
-    )
-
-    menu = cur.fetchone()
-
-    if not menu:
-        conn.close()
-        return
-
-    title, parent_id = menu
-
-    cur.execute("""
-        SELECT id, title
-        FROM menus
-        WHERE parent_id = ?
-        ORDER BY position, id
-    """, (menu_id,))
-
-    submenus = cur.fetchall()
-
-    cur.execute("""
-        SELECT id, title, content_type
-        FROM contents
-        WHERE menu_id = ?
-        ORDER BY position, id
-    """, (menu_id,))
-
-    contents = cur.fetchall()
-
-    conn.close()
-
-    keyboard = []
-
-    for sub_id, sub_title in submenus:
-        keyboard.append([
-            InlineKeyboardButton(
-                f"📂 {sub_title}",
-                callback_data=f"menu:{sub_id}"
-            )
-        ])
-
-    for content_id, content_title, content_type in contents:
-
-        icon = {
-            "text": "📄",
-            "pdf": "📕",
-            "photo": "🖼",
-            "video": "🎥",
-            "document": "📎",
-            "audio": "🎧"
-        }.get(content_type, "📄")
-
-        keyboard.append([
-            InlineKeyboardButton(
-                f"{icon} {content_title}",
-                callback_data=f"content:{content_id}"
-            )
-        ])
-
-    if parent_id == 0:
-        back = "materials"
-    else:
-        back = f"menu:{parent_id}"
-
-    keyboard.append([
-        InlineKeyboardButton("🔙 رجوع", callback_data=back),
-        InlineKeyboardButton("🏠 الرئيسية", callback_data="home")
-    ])
-
-    await query.edit_message_text(
-        f"📚 *{title}*\n\nاختر ما تريد:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
-
-
-# =========================================================
-# عرض المحتوى
-# =========================================================
-
-async def show_content(query, content_id):
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT menu_id, title, content_type, content, file_id
-        FROM contents
-        WHERE id = ?
-    """, (content_id,))
-
-    row = cur.fetchone()
-    conn.close()
-
-    if not row:
-        await query.answer("المحتوى غير موجود", show_alert=True)
-        return
-
-    menu_id, title, content_type, content, file_id = row
-
-    await query.answer()
-
-    try:
-
-        if content_type == "text":
-
-            await query.message.reply_text(
-                f"📖 *{title}*\n\n{content or 'لا يوجد محتوى.'}",
-                parse_mode="Markdown"
-            )
-
-        elif content_type == "pdf":
-
-            await query.message.reply_document(
-                document=file_id,
-                caption=f"📕 {title}"
-            )
-
-        elif content_type == "document":
-
-            await query.message.reply_document(
-                document=file_id,
-                caption=f"📎 {title}"
-            )
-
-        elif content_type == "photo":
-
-            await query.message.reply_photo(
-                photo=file_id,
-                caption=f"🖼 {title}"
-            )
-
-        elif content_type == "video":
-
-            await query.message.reply_video(
-                video=file_id,
-                caption=f"🎥 {title}"
-            )
-
-        elif content_type == "audio":
-
-            await query.message.reply_audio(
-                audio=file_id,
-                caption=f"🎧 {title}"
-            )
-
-    except Exception as e:
-        logging.error(e)
-        await query.message.reply_text(
-            "❌ حدث خطأ أثناء إرسال المحتوى."
-        )
-
-
-# =========================================================
-# لوحة الأدمن
-# =========================================================
-
-def admin_keyboard():
-
-    keyboard = [
-        [
-            InlineKeyboardButton("➕ إضافة مادة", callback_data="add_material"),
-            InlineKeyboardButton("➕ إضافة قسم", callback_data="add_menu"),
-        ],
-        [
-            InlineKeyboardButton("📄 إضافة نص", callback_data="add_text"),
-            InlineKeyboardButton("📕 إضافة PDF", callback_data="add_pdf"),
-        ],
-        [
-            InlineKeyboardButton("📎 إضافة ملف", callback_data="add_file"),
-            InlineKeyboardButton("🖼 إضافة صورة", callback_data="add_photo"),
-        ],
-        [
-            InlineKeyboardButton("🎥 إضافة فيديو", callback_data="add_video"),
-            InlineKeyboardButton("🎧 إضافة صوت", callback_data="add_audio"),
-        ],
-        [
-            InlineKeyboardButton("🗑 حذف محتوى", callback_data="delete_content"),
-            InlineKeyboardButton("📊 الإحصائيات", callback_data="stats"),
-        ],
-        [
-            InlineKeyboardButton("📢 إذاعة للطلاب", callback_data="broadcast"),
-        ],
-        [
-            InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="home")
-        ]
-    ]
-
-    return InlineKeyboardMarkup(keyboard)
-
-
-async def admin_panel(query):
-
-    if query.from_user.id != ADMIN_ID:
-        await query.answer("⛔ ليس لديك صلاحية.", show_alert=True)
-        return
-
-    await query.answer()
-
-    await query.edit_message_text(
-        """
-⚙️ *لوحة تحكم البوت*
-
-من هنا تستطيع إدارة البوت الدراسي:
-
-➕ إضافة المواد والأقسام
-📄 إضافة المحاضرات والملخصات
-📕 رفع ملفات PDF
-📎 رفع الملفات
-🖼 الصور
-🎥 الفيديوهات
-🎧 الملفات الصوتية
-🗑 حذف المحتوى
-📢 إرسال إشعار للطلاب
-📊 معرفة الإحصائيات
-        """,
-        reply_markup=admin_keyboard(),
-        parse_mode="Markdown"
-    )
-
-
-# =========================================================
-# بدء إضافة مادة
-# =========================================================
-
-async def ask_add_material(query, context):
-
-    if query.from_user.id != ADMIN_ID:
-        return
-
-    context.user_data["admin_action"] = "add_material"
-
-    await query.answer()
-
-    await query.message.reply_text(
-        "➕ أرسل الآن اسم المادة الدراسية:"
-    )
-
-
-# =========================================================
-# إضافة قسم
-# =========================================================
-
-async def ask_add_menu(query, context):
-
-    if query.from_user.id != ADMIN_ID:
-        return
-
-    context.user_data["admin_action"] = "add_menu"
-
-    await query.answer()
-
-    await query.message.reply_text(
-        "📂 أرسل اسم القسم الذي تريد إضافته:"
-    )
-
-
-# =========================================================
-# إضافة نص
-# =========================================================
-
-async def ask_add_text(query, context):
-
-    if query.from_user.id != ADMIN_ID:
-        return
-
-    context.user_data["admin_action"] = "add_text_title"
-
-    await query.answer()
-
-    await query.message.reply_text(
-        "📄 أرسل عنوان المحتوى النصي:"
-    )
-
-
-# =========================================================
-# إضافة ملفات
-# =========================================================
-
-async def ask_file(query, context, file_type):
-
-    if query.from_user.id != ADMIN_ID:
-        return
-
-    context.user_data["admin_action"] = f"add_{file_type}_title"
-
-    await query.answer()
-
-    await query.message.reply_text(
-        f"📎 أرسل عنوان {file_type}:"
-    )
-
-
-# =========================================================
-# معالجة الأدمن
-# =========================================================
-
-async def admin_text(update, context):
+async def admin_panel(update, context):
 
     if update.effective_user.id != ADMIN_ID:
         return
-
-    action = context.user_data.get("admin_action")
-
-    if not action:
-        return
-
-    text = update.message.text.strip()
-
-    # -----------------------------------------
-    # إضافة مادة
-    # -----------------------------------------
-
-    if action == "add_material":
-
-        conn = db()
-        cur = conn.cursor()
-
-        cur.execute("""
-            INSERT INTO menus
-            (parent_id, title)
-            VALUES (0, ?)
-        """, (text,))
-
-        conn.commit()
-        conn.close()
-
-        context.user_data.clear()
-
-        await update.message.reply_text(
-            f"✅ تمت إضافة المادة:\n\n📚 {text}"
-        )
-
-        return
-
-    # -----------------------------------------
-    # إضافة قسم
-    # -----------------------------------------
-
-    if action == "add_menu":
-
-        context.user_data["new_menu_title"] = text
-        context.user_data["admin_action"] = "choose_parent"
-
-        conn = db()
-        cur = conn.cursor()
-
-        cur.execute("""
-            SELECT id, title
-            FROM menus
-            ORDER BY id
-        """)
-
-        rows = cur.fetchall()
-        conn.close()
-
-        keyboard = []
-
-        for menu_id, title in rows:
-            keyboard.append([
-                InlineKeyboardButton(
-                    title,
-                    callback_data=f"parent:{menu_id}"
-                )
-            ])
-
-        await update.message.reply_text(
-            "📂 اختر القسم الأب:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-        return
-
-    # -----------------------------------------
-    # عنوان النص
-    # -----------------------------------------
-
-    if action == "add_text_title":
-
-        context.user_data["new_content_title"] = text
-        context.user_data["admin_action"] = "add_text_content"
-
-        await update.message.reply_text(
-            "📝 أرسل الآن محتوى المحاضرة أو الملخص:"
-        )
-
-        return
-
-    # -----------------------------------------
-    # محتوى النص
-    # -----------------------------------------
-
-    if action == "add_text_content":
-
-        title = context.user_data.get("new_content_title")
-        menu_id = context.user_data.get("selected_menu", 0)
-
-        conn = db()
-        cur = conn.cursor()
-
-        cur.execute("""
-            INSERT INTO contents
-            (menu_id, title, content_type, content)
-            VALUES (?, ?, 'text', ?)
-        """, (
-            menu_id,
-            title,
-            text
-        ))
-
-        conn.commit()
-        conn.close()
-
-        context.user_data.clear()
-
-        await update.message.reply_text(
-            "✅ تمت إضافة المحتوى بنجاح."
-        )
-
-        return
-
-
-# =========================================================
-# استقبال الملفات
-# =========================================================
-
-async def receive_file(update, context):
-
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    action = context.user_data.get("admin_action")
-
-    if not action:
-        return
-
-    file_type = None
-
-    if action == "add_pdf_title":
-        file_type = "pdf"
-
-    elif action == "add_file_title":
-        file_type = "document"
-
-    elif action == "add_photo_title":
-        file_type = "photo"
-
-    elif action == "add_video_title":
-        file_type = "video"
-
-    elif action == "add_audio_title":
-        file_type = "audio"
-
-    elif action in [
-        "add_pdf_file",
-        "add_file_file",
-        "add_photo_file",
-        "add_video_file",
-        "add_audio_file"
-    ]:
-
-        file_type = action.replace("add_", "").replace("_file", "")
-
-    if not file_type:
-        return
-
-    if action.endswith("_title"):
-
-        context.user_data["new_content_title"] = update.message.text
-
-        context.user_data["admin_action"] = f"add_{file_type}_file"
-
-        await update.message.reply_text(
-            f"📎 أرسل الآن ملف {file_type}:"
-        )
-
-        return
-
-    file_id = None
-
-    if file_type == "pdf" or file_type == "document":
-
-        if update.message.document:
-            file_id = update.message.document.file_id
-
-    elif file_type == "photo":
-
-        if update.message.photo:
-            file_id = update.message.photo[-1].file_id
-
-    elif file_type == "video":
-
-        if update.message.video:
-            file_id = update.message.video.file_id
-
-    elif file_type == "audio":
-
-        if update.message.audio:
-            file_id = update.message.audio.file_id
-
-    if not file_id:
-        await update.message.reply_text(
-            "❌ نوع الملف غير صحيح."
-        )
-        return
-
-    title = context.user_data.get(
-        "new_content_title",
-        "محتوى جديد"
-    )
-
-    menu_id = context.user_data.get(
-        "selected_menu",
-        0
-    )
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        INSERT INTO contents
-        (menu_id, title, content_type, file_id)
-        VALUES (?, ?, ?, ?)
-    """, (
-        menu_id,
-        title,
-        file_type,
-        file_id
-    ))
-
-    conn.commit()
-    conn.close()
 
     context.user_data.clear()
 
     await update.message.reply_text(
-        "✅ تمت إضافة الملف بنجاح."
+        "⚙️ لوحة تحكم البوت\n\n"
+        "اختر القسم الذي تريد إدارته 👇",
+        reply_markup=admin_keyboard()
     )
 
 
 # =========================================================
-# اختيار القسم الأب
+# STATISTICS
 # =========================================================
 
-async def choose_parent(query, context):
+async def statistics(update, context):
 
-    if query.from_user.id != ADMIN_ID:
-        return
-
-    parent_id = int(query.data.split(":")[1])
-
-    title = context.user_data.get("new_menu_title")
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        INSERT INTO menus
-        (parent_id, title)
-        VALUES (?, ?)
-    """, (
-        parent_id,
-        title
-    ))
-
-    conn.commit()
-    conn.close()
-
-    context.user_data.clear()
-
-    await query.answer("تمت الإضافة ✅")
-
-    await query.message.reply_text(
-        f"✅ تمت إضافة القسم:\n\n📂 {title}"
-    )
-
-
-# =========================================================
-# الإحصائيات
-# =========================================================
-
-async def stats(query):
-
-    if query.from_user.id != ADMIN_ID:
+    if update.effective_user.id != ADMIN_ID:
         return
 
     conn = db()
@@ -842,51 +289,139 @@ async def stats(query):
     cur.execute("SELECT COUNT(*) FROM users")
     users = cur.fetchone()[0]
 
-    cur.execute("SELECT COUNT(*) FROM menus")
-    menus = cur.fetchone()[0]
-
-    cur.execute("SELECT COUNT(*) FROM contents")
-    contents = cur.fetchone()[0]
-
     conn.close()
 
-    await query.answer()
-
-    await query.edit_message_text(
+    await update.message.reply_text(
         f"""
-📊 *إحصائيات البوت*
+📊 إحصائيات البوت
 
-👥 المستخدمون: `{users}`
-📚 الأقسام: `{menus}`
-📖 المحتويات: `{contents}`
-        """,
-        reply_markup=InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(
-                    "🔙 لوحة التحكم",
-                    callback_data="admin"
-                )
-            ]
-        ]),
-        parse_mode="Markdown"
+👥 عدد المشتركين: {users}
+
+🤖 حالة البوت:
+{"🛠 صيانة" if get_setting("maintenance") == "1" else "🟢 يعمل"}
+
+📅 قاعدة البيانات تعمل بشكل طبيعي.
+""",
+        reply_markup=admin_keyboard()
     )
 
 
 # =========================================================
-# الإذاعة
+# SUBSCRIBERS
 # =========================================================
 
-async def ask_broadcast(query, context):
+async def subscribers(update, context):
 
-    if query.from_user.id != ADMIN_ID:
+    if update.effective_user.id != ADMIN_ID:
         return
 
-    context.user_data["admin_action"] = "broadcast"
+    conn = db()
+    cur = conn.cursor()
 
-    await query.answer()
+    cur.execute("SELECT COUNT(*) FROM users")
+    count = cur.fetchone()[0]
 
-    await query.message.reply_text(
-        "📢 أرسل الرسالة التي تريد إرسالها لجميع المستخدمين:"
+    conn.close()
+
+    await update.message.reply_text(
+        f"👥 عدد المشتركين في البوت:\n\n"
+        f"🔢 {count} مستخدم",
+        reply_markup=admin_keyboard()
+    )
+
+
+# =========================================================
+# MAINTENANCE
+# =========================================================
+
+async def maintenance(update, context):
+
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    current = get_setting("maintenance")
+
+    if current == "1":
+        set_setting("maintenance", "0")
+
+        await update.message.reply_text(
+            "🟢 تم إيقاف وضع الصيانة.\n"
+            "البوت يعمل الآن.",
+            reply_markup=admin_keyboard()
+        )
+
+    else:
+        set_setting("maintenance", "1")
+
+        await update.message.reply_text(
+            "🛠 تم تفعيل وضع الصيانة.\n"
+            "المستخدمون لن يستطيعوا استخدام البوت حتى يتم إيقافه.",
+            reply_markup=admin_keyboard()
+        )
+
+
+# =========================================================
+# START MESSAGE
+# =========================================================
+
+async def edit_start_message(update, context):
+
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    context.user_data["state"] = "start_message"
+
+    await update.message.reply_text(
+        "✏️ أرسل رسالة البدء الجديدة:\n\n"
+        "هذه الرسالة تظهر عند استخدام /start."
+    )
+
+
+# =========================================================
+# MAINTENANCE MESSAGE
+# =========================================================
+
+async def edit_maintenance_message(update, context):
+
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    context.user_data["state"] = "maintenance_message"
+
+    await update.message.reply_text(
+        "🔧 أرسل رسالة وضع الصيانة الجديدة:"
+    )
+
+
+# =========================================================
+# SETTINGS
+# =========================================================
+
+async def bot_settings(update, context):
+
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    await update.message.reply_text(
+        "⚙️ إعدادات البوت\n\n"
+        "من هنا يمكنك تعديل الرسائل الأساسية.",
+        reply_markup=settings_keyboard()
+    )
+
+
+# =========================================================
+# BROADCAST
+# =========================================================
+
+async def broadcast_start(update, context):
+
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    context.user_data["state"] = "broadcast"
+
+    await update.message.reply_text(
+        "📢 أرسل الآن الرسالة التي تريد إرسالها لجميع المشتركين."
     )
 
 
@@ -895,25 +430,22 @@ async def broadcast(update, context):
     if update.effective_user.id != ADMIN_ID:
         return
 
-    if context.user_data.get("admin_action") != "broadcast":
-        return
-
     message = update.message.text
 
     conn = db()
     cur = conn.cursor()
 
-    cur.execute("SELECT id FROM users")
+    cur.execute("SELECT user_id FROM users")
     users = cur.fetchall()
 
     conn.close()
 
     sent = 0
+    failed = 0
 
     for (user_id,) in users:
 
         try:
-
             await context.bot.send_message(
                 chat_id=user_id,
                 text=message
@@ -921,210 +453,423 @@ async def broadcast(update, context):
 
             sent += 1
 
-        except Exception as e:
-            logging.error(e)
+        except Exception:
+            failed += 1
 
     context.user_data.clear()
 
     await update.message.reply_text(
-        f"📢 تمت الإذاعة بنجاح.\n\n"
-        f"👥 تم الإرسال إلى: {sent} مستخدم"
+        f"""
+📢 تمت عملية الإرسال الجماعي.
+
+✅ تم الإرسال: {sent}
+❌ فشل الإرسال: {failed}
+👥 الإجمالي: {len(users)}
+""",
+        reply_markup=admin_keyboard()
     )
 
 
 # =========================================================
-# البحث
+# ADMINS
 # =========================================================
 
-async def ask_search(query, context):
+async def admins(update, context):
 
-    context.user_data["search"] = True
-
-    await query.answer()
-
-    await query.message.reply_text(
-        "🔍 أرسل اسم المحاضرة أو المادة التي تبحث عنها:"
-    )
-
-
-async def search_content(update, context):
-
-    if not context.user_data.get("search"):
-        return False
-
-    text = update.message.text.strip()
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT id, title, content_type
-        FROM contents
-        WHERE title LIKE ?
-        ORDER BY id DESC
-        LIMIT 20
-    """, (
-        f"%{text}%",
-    ))
-
-    rows = cur.fetchall()
-
-    conn.close()
-
-    context.user_data.pop("search", None)
-
-    if not rows:
-
-        await update.message.reply_text(
-            "❌ لم يتم العثور على نتائج."
-        )
-
-        return True
-
-    keyboard = []
-
-    for content_id, title, content_type in rows:
-
-        keyboard.append([
-            InlineKeyboardButton(
-                f"📖 {title}",
-                callback_data=f"content:{content_id}"
-            )
-        ])
-
-    await update.message.reply_text(
-        f"🔎 نتائج البحث عن: {text}",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-    return True
-
-
-# =========================================================
-# معالجة الأزرار
-# =========================================================
-
-async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    query = update.callback_query
-
-    data = query.data
-
-    if data == "home":
-        await home(update, context)
-
-    elif data == "materials":
-        await query.answer()
-        await show_materials(query)
-
-    elif data.startswith("menu:"):
-        menu_id = int(data.split(":")[1])
-        await query.answer()
-        await show_menu(query, menu_id)
-
-    elif data.startswith("content:"):
-        content_id = int(data.split(":")[1])
-        await show_content(query, content_id)
-
-    elif data == "admin":
-        await admin_panel(query)
-
-    elif data == "add_material":
-        await ask_add_material(query, context)
-
-    elif data == "add_menu":
-        await ask_add_menu(query, context)
-
-    elif data == "add_text":
-        await ask_add_text(query, context)
-
-    elif data == "add_pdf":
-        await ask_file(query, context, "pdf")
-
-    elif data == "add_file":
-        await ask_file(query, context, "file")
-
-    elif data == "add_photo":
-        await ask_file(query, context, "photo")
-
-    elif data == "add_video":
-        await ask_file(query, context, "video")
-
-    elif data == "add_audio":
-        await ask_file(query, context, "audio")
-
-    elif data == "stats":
-        await stats(query)
-
-    elif data == "broadcast":
-        await ask_broadcast(query, context)
-
-    elif data == "search":
-        await ask_search(query, context)
-
-    elif data.startswith("parent:"):
-        await choose_parent(query, context)
-
-
-# =========================================================
-# معالج الرسائل
-# =========================================================
-
-async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if update.effective_user.id == ADMIN_ID:
-
-        if context.user_data.get("admin_action") == "broadcast":
-            await broadcast(update, context)
-            return
-
-        if update.message.text:
-
-            if await search_content(update, context):
-                return
-
-            await admin_text(update, context)
-            return
-
-        await receive_file(update, context)
+    if update.effective_user.id != ADMIN_ID:
         return
 
-    if update.message.text:
-
-        if await search_content(update, context):
-            return
+    await update.message.reply_text(
+        "👮 إعداد المشرفين\n\n"
+        "المشرف الرئيسي:\n"
+        f"🆔 {ADMIN_ID}\n\n"
+        "يمكن تطوير هذا القسم لإضافة وإزالة مشرفين متعددين.",
+        reply_markup=admin_keyboard()
+    )
 
 
 # =========================================================
-# تشغيل البوت
+# CHANNELS / GROUPS
+# =========================================================
+
+async def channels(update, context):
+
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    await update.message.reply_text(
+        "📢 قنوات ومجموعات\n\n"
+        "يمكن تخصيص هذا القسم لإدارة القنوات والمجموعات "
+        "المطلوبة في البوت.",
+        reply_markup=admin_keyboard()
+    )
+
+
+# =========================================================
+# ADS
+# =========================================================
+
+async def ads(update, context):
+
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    await update.message.reply_text(
+        "📣 قسم الإعلانات\n\n"
+        "يمكنك من هنا إدارة الإعلانات وإرسالها للمستخدمين.",
+        reply_markup=admin_keyboard()
+    )
+
+
+# =========================================================
+# HANDLE TEXT
+# =========================================================
+
+async def handle_text(update, context):
+
+    text = update.message.text
+    user_id = update.effective_user.id
+
+    # -------------------------------
+    # حالات الأدمن
+    # -------------------------------
+
+    if user_id == ADMIN_ID:
+
+        state = context.user_data.get("state")
+
+        if state == "start_message":
+
+            set_setting(
+                "start_message",
+                text
+            )
+
+            context.user_data.clear()
+
+            await update.message.reply_text(
+                "✅ تم تحديث رسالة البدء.",
+                reply_markup=admin_keyboard()
+            )
+
+            return
+
+        if state == "maintenance_message":
+
+            set_setting(
+                "maintenance_message",
+                text
+            )
+
+            context.user_data.clear()
+
+            await update.message.reply_text(
+                "✅ تم تحديث رسالة الصيانة.",
+                reply_markup=admin_keyboard()
+            )
+
+            return
+
+        if state == "broadcast":
+
+            await broadcast(
+                update,
+                context
+            )
+
+            return
+
+    # -------------------------------
+    # الرئيسية
+    # -------------------------------
+
+    if text == "🏠 القائمة الرئيسية":
+
+        context.user_data.clear()
+
+        await update.message.reply_text(
+            get_setting("start_message"),
+            reply_markup=main_keyboard(user_id)
+        )
+
+        return
+
+    # -------------------------------
+    # لوحة الأدمن
+    # -------------------------------
+
+    if text == "⚙️ لوحة الأدمن":
+
+        await admin_panel(
+            update,
+            context
+        )
+
+        return
+
+    # -------------------------------
+    # إحصائيات
+    # -------------------------------
+
+    if text == "📊 إحصائيات البوت":
+
+        await statistics(
+            update,
+            context
+        )
+
+        return
+
+    # -------------------------------
+    # عدد المشتركين
+    # -------------------------------
+
+    if text == "👥 عدد المشتركين":
+
+        await subscribers(
+            update,
+            context
+        )
+
+        return
+
+    # -------------------------------
+    # الإرسال الجماعي
+    # -------------------------------
+
+    if text == "📢 إرسال جماعي":
+
+        await broadcast_start(
+            update,
+            context
+        )
+
+        return
+
+    # -------------------------------
+    # الإعلانات
+    # -------------------------------
+
+    if text == "📣 الإعلانات":
+
+        await ads(
+            update,
+            context
+        )
+
+        return
+
+    # -------------------------------
+    # إعدادات البوت
+    # -------------------------------
+
+    if text == "⚙️ إعدادات البوت":
+
+        await bot_settings(
+            update,
+            context
+        )
+
+        return
+
+    # -------------------------------
+    # وضع الصيانة
+    # -------------------------------
+
+    if text == "🛠 وضع الصيانة":
+
+        await maintenance(
+            update,
+            context
+        )
+
+        return
+
+    # -------------------------------
+    # رسالة البدء
+    # -------------------------------
+
+    if text in [
+        "✏️ رسالة البدء",
+        "✏️ تعديل رسالة البدء"
+    ]:
+
+        await edit_start_message(
+            update,
+            context
+        )
+
+        return
+
+    # -------------------------------
+    # رسالة الصيانة
+    # -------------------------------
+
+    if text in [
+        "🔧 رسالة الصيانة",
+        "🛠 تعديل رسالة الصيانة"
+    ]:
+
+        await edit_maintenance_message(
+            update,
+            context
+        )
+
+        return
+
+    # -------------------------------
+    # المشرفين
+    # -------------------------------
+
+    if text == "👮 إعداد المشرفين":
+
+        await admins(
+            update,
+            context
+        )
+
+        return
+
+    # -------------------------------
+    # القنوات والمجموعات
+    # -------------------------------
+
+    if text == "📢 قنوات ومجموعات":
+
+        await channels(
+            update,
+            context
+        )
+
+        return
+
+    # -------------------------------
+    # رجوع
+    # -------------------------------
+
+    if text == "🔙 رجوع":
+
+        await admin_panel(
+            update,
+            context
+        )
+
+        return
+
+    # -------------------------------
+    # تحديث
+    # -------------------------------
+
+    if text == "🔄 تحديث":
+
+        await start(
+            update,
+            context
+        )
+
+        return
+
+    # =====================================================
+    # أقسام المستخدم
+    # =====================================================
+
+    if text == "📚 المواد الدراسية":
+
+        await update.message.reply_text(
+            "📚 المواد الدراسية\n\n"
+            "لا توجد مواد مضافة حالياً.",
+            reply_markup=main_keyboard(user_id)
+        )
+
+        return
+
+    if text == "📖 المحاضرات":
+
+        await update.message.reply_text(
+            "📖 المحاضرات\n\n"
+            "لا توجد محاضرات مضافة حالياً.",
+            reply_markup=main_keyboard(user_id)
+        )
+
+        return
+
+    if text == "📝 الملخصات":
+
+        await update.message.reply_text(
+            "📝 الملخصات\n\n"
+            "لا توجد ملخصات مضافة حالياً.",
+            reply_markup=main_keyboard(user_id)
+        )
+
+        return
+
+    if text == "📂 الملفات":
+
+        await update.message.reply_text(
+            "📂 الملفات\n\n"
+            "لا توجد ملفات مضافة حالياً.",
+            reply_markup=main_keyboard(user_id)
+        )
+
+        return
+
+    if text == "❓ الأسئلة":
+
+        await update.message.reply_text(
+            "❓ الأسئلة والمراجعات\n\n"
+            "لا توجد أسئلة مضافة حالياً.",
+            reply_markup=main_keyboard(user_id)
+        )
+
+        return
+
+    if text == "🔍 البحث":
+
+        await update.message.reply_text(
+            "🔍 أرسل اسم المحاضرة أو الملخص الذي تريد البحث عنه.",
+            reply_markup=main_keyboard(user_id)
+        )
+
+        return
+
+
+# =========================================================
+# MAIN
 # =========================================================
 
 def main():
 
-    application = (
+    if not TOKEN:
+
+        print(
+            "❌ لم يتم العثور على BOT_TOKEN."
+        )
+
+        return
+
+    app = (
         ApplicationBuilder()
         .token(TOKEN)
         .build()
     )
 
-    application.add_handler(
-        CommandHandler("start", start)
-    )
-
-    application.add_handler(
-        CallbackQueryHandler(callbacks)
-    )
-
-    application.add_handler(
-        MessageHandler(
-            filters.ALL & ~filters.COMMAND,
-            messages
+    app.add_handler(
+        CommandHandler(
+            "start",
+            start
         )
     )
 
-    print("🤖 البوت الدراسي يعمل الآن...")
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_text
+        )
+    )
 
-    application.run_polling()
+    print("🤖 البوت يعمل الآن...")
+
+    app.run_polling()
 
 
 if __name__ == "__main__":

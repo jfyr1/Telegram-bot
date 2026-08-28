@@ -20,7 +20,7 @@ from telegram.ext import (
 # CONFIG
 # =========================================================
 
-TOKEN = os.getenv("8925599691:AAGvo1qs6akZrIEuVbcfhMfOVlju1Pzp1s")
+TOKEN = os.getenv("BOT_TOKEN")
 
 ADMIN_ID = 5734654153
 DB_NAME = "bot.db"

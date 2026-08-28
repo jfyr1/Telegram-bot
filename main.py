@@ -1,9 +1,8 @@
 import logging
 import sqlite3
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import ReplyKeyboardMarkup, KeyboardButton, Update
 from telegram.ext import (
     ApplicationBuilder,
-    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -37,11 +36,13 @@ def init_db():
 init_db()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-  user_id = update.effective_user.id
-  await show_menu(update, context, parent_id=0, is_start=True)
+  context.user_data['current_parent_id'] = 0
+  await show_menu(update, context, parent_id=0)
 
-async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, parent_id=0, is_start=False):
+async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, parent_id=0):
   user_id = update.effective_user.id
+  context.user_data['current_parent_id'] = parent_id
+  
   conn = sqlite3.connect("tree_bot.db")
   cursor = conn.cursor()
   cursor.execute("SELECT id, text FROM main_buttons WHERE parent_id = ?", (parent_id,))
@@ -49,100 +50,108 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, parent_i
   conn.close()
 
   keyboard = []
+  # ترتيب الأزرار في الأسفل (كل زرين في صف أو حسب الرغبة)
+  row = []
   for btn_id, btn_text in buttons:
-    keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"btn_{btn_id}")])
+    row.append(KeyboardButton(btn_text))
+    if len(row) == 2:
+      keyboard.append(row)
+      row = []
+  if row:
+    keyboard.append(row)
 
+  # أزرار التنقل والتحكم بالأسفل
+  nav_row = []
   if parent_id != 0:
     conn = sqlite3.connect("tree_bot.db")
     cursor = conn.cursor()
     cursor.execute("SELECT parent_id FROM main_buttons WHERE id = ?", (parent_id,))
-    p_id = cursor.fetchone()[0]
+    result = cursor.fetchone()
     conn.close()
-    keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data=f"btn_{p_id}" if p_id != 0 else "main_menu")])
-  else:
-    keyboard.append([InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")])
+    
+    if result:
+      context.user_data['back_id'] = result[0]
+    else:
+      context.user_data['back_id'] = 0
+      
+    nav_row.append(KeyboardButton("🔙 رجوع"))
+  
+  nav_row.append(KeyboardButton("🔙 القائمة الرئيسية"))
 
   if user_id == ADMIN_ID:
-    keyboard.append([InlineKeyboardButton("⚙️ لوحة تحكم الآدمن", callback_data="admin_panel")])
+    nav_row.append(KeyboardButton("⚙️ لوحة تحكم الآدمن"))
 
-  reply_markup = InlineKeyboardMarkup(keyboard)
+  if nav_row:
+    keyboard.append(nav_row)
+
+  reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
   text_msg = "أهلاً بك في المنصة التعليمية 📚\nاختر من القائمة أدناه:"
 
-  if is_start:
-    await update.message.reply_text(text_msg, reply_markup=reply_markup)
-  else:
-    query = update.callback_query
-    await query.edit_message_text(text_msg, reply_markup=reply_markup)
+  await update.message.reply_text(text_msg, reply_markup=reply_markup)
 
-async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-  query = update.callback_query
-  if update.effective_user.id != ADMIN_ID:
-    await query.answer("هذا الأمر مخصص للمشرف فقط!", show_alert=True)
-    return
-
-  keyboard = [
-      [InlineKeyboardButton("➕ إضافة زر جديد", callback_data="add_btn")],
-      [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")],
-  ]
-  await query.edit_message_text("⚙️ لوحة تحكم الآدمن لإدارة القوائم:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-  query = update.callback_query
-  await query.answer()
-  data = query.data
+async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  text = update.message.text
   user_id = update.effective_user.id
 
-  if data == "main_menu":
+  if text == "🔙 القائمة الرئيسية":
     await show_menu(update, context, parent_id=0)
-  elif data == "admin_panel":
-    await admin_panel(update, context)
-  elif data == "add_btn":
-    if user_id != ADMIN_ID: return
-    await query.message.reply_text("أرسل بيانات الزر الجديد بهذه الصيغة:\n`إضافة زر: [الرقم الأب (0 للرئيسية)], [نص الزر]`", parse_mode="Markdown")
-  elif data.startswith("btn_"):
-    btn_id = int(data.split("_")[1])
-    conn = sqlite3.connect("tree_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT type, content, text FROM main_buttons WHERE id = ?", (btn_id,))
-    btn = cursor.fetchone()
-    conn.close()
-
-    if btn:
-      b_type, b_content, b_text = btn
-      if b_type == "menu":
-        await show_menu(update, context, parent_id=btn_id)
-      else:
-        await query.message.reply_text(f"📖 *{b_text}*\n\n{b_content}", parse_mode="Markdown")
-
-async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-  if update.effective_user.id != ADMIN_ID:
+    return
+  elif text == "🔙 رجوع":
+    parent_id = context.user_data.get('back_id', 0)
+    await show_menu(update, context, parent_id=parent_id)
+    return
+  elif text == "⚙️ لوحة تحكم الآدمن" and user_id == ADMIN_ID:
+    keyboard = [
+        [KeyboardButton("➕ إضافة زر جديد")],
+        [KeyboardButton("🔙 القائمة الرئيسية")],
+    ]
+    await update.message.reply_text("⚙️ لوحة تحكم الآدمن لإدارة القوائم:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+    return
+  elif text == "➕ إضافة زر جديد" and user_id == ADMIN_ID:
+    current_p = context.user_data.get('current_parent_id', 0)
+    await update.message.reply_text(f"أرسل اسم الزر الجديد ليتم إضافته تحت القسم الحالي (رقم الأب: {current_p}):\nاكتب بالشكل: `إضافة زر: [نص الزر]`", parse_mode="Markdown")
     return
 
-  text = update.message.text
+  # معالجة إضافة الزر إذا كان الآدمن يكتبه
+  if user_id == ADMIN_ID and text.startswith("إضافة زر:"):
+    try:
+      btn_text = text.replace("إضافة زر:", "").strip()
+      current_p = context.user_data.get('current_parent_id', 0)
+      conn = sqlite3.connect("tree_bot.db")
+      cursor = conn.cursor()
+      cursor.execute("INSERT INTO main_buttons (parent_id, text, type) VALUES (?, ?, ?)", (current_p, btn_text, "menu"))
+      conn.commit()
+      conn.close()
+      await update.message.reply_text(f"تمت إضافة الزر ({btn_text}) بنجاح! ✅")
+      await show_menu(update, context, parent_id=current_p)
+      return
+    except Exception:
+      await update.message.reply_text("خطأ في الصيغة. استخدم: `إضافة زر: [نص الزر]`", parse_mode="Markdown")
+      return
+
+  # البحث إذا كان النص المطابق هو أحد أزرار القائمة الحالية
+  current_p = context.user_data.get('current_parent_id', 0)
   conn = sqlite3.connect("tree_bot.db")
   cursor = conn.cursor()
-
-  if text.startswith("إضافة زر:"):
-    try:
-      parts = text.replace("إضافة زر:", "").split(",")
-      parent_id = int(parts[0].strip())
-      btn_text = parts[1].strip()
-      cursor.execute("INSERT INTO main_buttons (parent_id, text, type) VALUES (?, ?, ?)", (parent_id, btn_text, "menu"))
-      conn.commit()
-      await update.message.reply_text(f"تمت إضافة الزر ({btn_text}) بنجاح! ✅")
-    except Exception:
-      await update.message.reply_text("خطأ في الصيغة. استخدم: `إضافة زر: [الرقم الأب], [نص الزر]`", parse_mode="Markdown")
-
+  cursor.execute("SELECT id, type, content, text FROM main_buttons WHERE parent_id = ? AND text = ?", (current_p, text))
+  btn = cursor.fetchone()
   conn.close()
+
+  if btn:
+    btn_id, b_type, b_content, b_text = btn
+    if b_type == "menu":
+      await show_menu(update, context, parent_id=btn_id)
+    else:
+      content_text = b_content if b_content else "لا يوجد محتوى مضاف بعد."
+      await update.message.reply_text(f"📖 *{b_text}*\n\n{content_text}", parse_mode="Markdown")
 
 def main():
   application = ApplicationBuilder().token(TOKEN).build()
 
   application.add_handler(CommandHandler("start", start))
-  application.add_handler(CallbackQueryHandler(button_handler))
-  application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_text_handler))
+  application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
 
-  print("البوت يعمل الآن بنظام القوائم الشجرية...")
+  print("البوت يعمل الآن بلوحة المفاتيح السفلية (Reply Keyboard)...")
   application.run_polling()
 
 if __name__ == "__main__":

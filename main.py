@@ -1,18 +1,13 @@
 import os
 import sqlite3
 import logging
-from telegram import (
-    Update,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
+from contextlib import closing
+
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -21,327 +16,474 @@ from telegram.ext import (
 # CONFIG
 # =========================================================
 
-TOKEN = "8925599691:AAGvo1qs6akZrIE-uVbcfhMfOVlju1Pzp1s"
+TOKEN = os.getenv("8925599691:AAGvo1qs6akZrIEuVbcfhMfOVlju1Pzp1s")
 ADMIN_ID = 5734654153
 DB_NAME = "bot.db"
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    level=logging.INFO,
 )
+
+CONTACT_TEXT = """أهلاً بك في المنصة الرسمية لدفعة الهندسة 2026.
+
+يسرنا تواصلكم معنا عبر منصاتنا الرسمية لمتابعة آخر التبليغات والمستجدات الدراسية:
+
+📢 قناة التليجرام الرسمية:
+https://t.me/Eng26am
+
+📸 حساب الإنستغرام:
+https://instagram.com/eng26c
+
+🎵 حساب التيك توك:
+https://tiktok.com/eng26c
+
+مع تحيات:
+ممثل الدفعة المهندس جعفر
+💬 @JFYR1"""
+
+HELP_TEXT = """📖 تعلم كيفية استخدام البوت
+
+1️⃣ اختر القسم من القائمة الرئيسية.
+2️⃣ ادخل إلى المادة المطلوبة.
+3️⃣ اختر المحاضرة أو الملخص أو الملف.
+4️⃣ يمكنك استخدام 🔍 البحث في المواد للعثور على المحتوى بسرعة.
+5️⃣ استخدم 🔙 رجوع للعودة للقائمة السابقة.
+6️⃣ استخدم 🏠 القائمة الرئيسية للعودة إلى البداية."""
+
+START_TEXT = """👋 أهلاً وسهلاً بك في المنصة الرسمية لدفعة الهندسة 2026.
+
+📚 من هنا يمكنك الوصول إلى المواد الدراسية والمحاضرات والملخصات والملفات بسهولة.
+
+اختر من القائمة أدناه 👇"""
 
 
 # =========================================================
 # DATABASE
 # =========================================================
 
-def db():
+def get_db():
     return sqlite3.connect(DB_NAME)
 
 
 def init_db():
-    conn = db()
-    cur = conn.cursor()
+    with closing(get_db()) as conn:
+        cur = conn.cursor()
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            first_name TEXT,
-            username TEXT,
-            joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                first_name TEXT,
+                username TEXT,
+                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS admins (
+                user_id INTEGER PRIMARY KEY
+            )
+        """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS buttons (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            parent_id INTEGER DEFAULT 0,
-            title TEXT NOT NULL,
-            content_type TEXT DEFAULT 'menu',
-            content TEXT,
-            file_id TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS admins (
-            user_id INTEGER PRIMARY KEY
-        )
-    """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS buttons (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                parent_id INTEGER NOT NULL DEFAULT 0,
+                title TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0
+            )
+        """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS channels (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id TEXT,
-            title TEXT,
-            username TEXT
-        )
-    """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                button_id INTEGER UNIQUE,
+                content_type TEXT NOT NULL DEFAULT 'none',
+                text_content TEXT,
+                file_id TEXT,
+                caption TEXT
+            )
+        """)
 
-    conn.commit()
-    conn.close()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id TEXT NOT NULL,
+                title TEXT,
+                username TEXT
+            )
+        """)
 
-    defaults = {
-        "maintenance": "0",
-        "start_message":
-            "👋 أهلاً وسهلاً بك في البوت الدراسي.\n\n"
-            "📚 اختر من القائمة الرئيسية:",
-        "maintenance_message":
-            "🛠 البوت حالياً في وضع الصيانة.\n"
-            "يرجى المحاولة لاحقاً."
-    }
-
-    conn = db()
-    cur = conn.cursor()
-
-    for key, value in defaults.items():
         cur.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
-            (key, value)
+            "INSERT OR IGNORE INTO admins(user_id) VALUES (?)",
+            (ADMIN_ID,),
         )
 
-    cur.execute(
-        "INSERT OR IGNORE INTO admins (user_id) VALUES (?)",
-        (ADMIN_ID,)
-    )
+        defaults = {
+            "maintenance": "0",
+            "start_message": START_TEXT,
+            "maintenance_message": "🛠 البوت حالياً في وضع الصيانة.\nيرجى المحاولة لاحقاً.",
+            "latest_news": "",
+            "editor_text": "",
+        }
 
-    conn.commit()
-    conn.close()
+        for key, value in defaults.items():
+            cur.execute(
+                "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
+                (key, value),
+            )
+
+        conn.commit()
 
 
 init_db()
 
 
-# =========================================================
-# SETTINGS
-# =========================================================
-
 def get_setting(key):
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute(
-        "SELECT value FROM settings WHERE key=?",
-        (key,)
-    )
-
-    row = cur.fetchone()
-    conn.close()
-
-    return row[0] if row else ""
+    with closing(get_db()) as conn:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (key,)
+        ).fetchone()
+        return row[0] if row else ""
 
 
 def set_setting(key, value):
-    conn = db()
-    cur = conn.cursor()
+    with closing(get_db()) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)",
+            (key, value),
+        )
+        conn.commit()
 
-    cur.execute("""
-        INSERT OR REPLACE INTO settings (key, value)
-        VALUES (?, ?)
-    """, (key, value))
-
-    conn.commit()
-    conn.close()
-
-
-# =========================================================
-# ADMIN CHECK
-# =========================================================
 
 def is_admin(user_id):
     if user_id == ADMIN_ID:
         return True
 
-    conn = db()
-    cur = conn.cursor()
+    with closing(get_db()) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM admins WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return row is not None
 
-    cur.execute(
-        "SELECT user_id FROM admins WHERE user_id=?",
-        (user_id,)
-    )
-
-    result = cur.fetchone()
-    conn.close()
-
-    return result is not None
-
-
-# =========================================================
-# USERS
-# =========================================================
 
 def save_user(user):
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        INSERT OR REPLACE INTO users
-        (user_id, first_name, username)
-        VALUES (?, ?, ?)
-    """, (
-        user.id,
-        user.first_name or "",
-        user.username or ""
-    ))
-
-    conn.commit()
-    conn.close()
+    with closing(get_db()) as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO users(user_id, first_name, username)
+            VALUES (?, ?, ?)
+        """, (
+            user.id,
+            user.first_name or "",
+            user.username or "",
+        ))
+        conn.commit()
 
 
-def get_users():
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("SELECT user_id FROM users")
-    users = [row[0] for row in cur.fetchall()]
-
-    conn.close()
-    return users
+def get_all_users():
+    with closing(get_db()) as conn:
+        return [
+            row[0]
+            for row in conn.execute("SELECT user_id FROM users").fetchall()
+        ]
 
 
 # =========================================================
-# MAIN MENU
+# KEYBOARDS
 # =========================================================
+
+def keyboard(rows):
+    return ReplyKeyboardMarkup(
+        rows,
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
 
 def main_keyboard(user_id):
-
-    buttons = [
+    rows = [
         [
             KeyboardButton("📚 المواد الدراسية"),
-            KeyboardButton("📖 المحاضرات")
+            KeyboardButton("📖 المحاضرات"),
         ],
         [
             KeyboardButton("📝 الملخصات"),
-            KeyboardButton("📂 الملفات")
+            KeyboardButton("📂 الملفات"),
         ],
         [
             KeyboardButton("❓ الأسئلة"),
-            KeyboardButton("🔍 البحث")
-        ]
+            KeyboardButton("🔍 البحث في المواد"),
+        ],
+        [
+            KeyboardButton("📖 تعلم كيفية استخدام البوت"),
+            KeyboardButton("📞 تواصل معنا"),
+        ],
     ]
 
     if is_admin(user_id):
-        buttons.append([
-            KeyboardButton("⚙️ لوحة الأدمن")
-        ])
+        rows.append([KeyboardButton("⚙️ لوحة الأدمن")])
 
-    return ReplyKeyboardMarkup(
-        buttons,
-        resize_keyboard=True,
-        is_persistent=True
-    )
+    return keyboard(rows)
 
-
-# =========================================================
-# ADMIN MENU
-# =========================================================
 
 def admin_keyboard():
-
-    return ReplyKeyboardMarkup(
+    return keyboard([
         [
-            [
-                KeyboardButton("📊 الإحصائيات"),
-                KeyboardButton("👥 المشتركين")
-            ],
-            [
-                KeyboardButton("📰 محرر الأخبار"),
-                KeyboardButton("✏️ المحرر النصي")
-            ],
-            [
-                KeyboardButton("🔘 محرر الأزرار"),
-                KeyboardButton("📢 إرسال جماعي")
-            ],
-            [
-                KeyboardButton("⚙️ إعدادات البوت"),
-                KeyboardButton("🛠 وضع الصيانة")
-            ],
-            [
-                KeyboardButton("✏️ رسالة البدء"),
-                KeyboardButton("🔧 رسالة الصيانة")
-            ],
-            [
-                KeyboardButton("👮 إعداد المشرفين"),
-                KeyboardButton("📢 قنوات ومجموعات")
-            ],
-            [
-                KeyboardButton("🏠 القائمة الرئيسية")
-            ]
+            KeyboardButton("📊 الإحصائيات"),
+            KeyboardButton("👥 المشتركين"),
         ],
-        resize_keyboard=True,
-        is_persistent=True
-    )
+        [
+            KeyboardButton("🔘 محرر الأزرار"),
+            KeyboardButton("📝 محرر المشاركات"),
+        ],
+        [
+            KeyboardButton("📰 محرر الأخبار"),
+            KeyboardButton("📢 إرسال جماعي"),
+        ],
+        [
+            KeyboardButton("⚙️ إعدادات البوت"),
+            KeyboardButton("🛠 وضع الصيانة"),
+        ],
+        [
+            KeyboardButton("👮 إعداد المشرفين"),
+            KeyboardButton("📢 قنوات ومجموعات"),
+        ],
+        [
+            KeyboardButton("🏠 القائمة الرئيسية"),
+        ],
+    ])
+
+
+def button_editor_keyboard():
+    return keyboard([
+        [
+            KeyboardButton("➕ إضافة زر"),
+            KeyboardButton("✏️ تعديل زر"),
+        ],
+        [
+            KeyboardButton("🗑 حذف زر"),
+            KeyboardButton("↕️ ترتيب الأزرار"),
+        ],
+        [
+            KeyboardButton("📋 عرض الأزرار"),
+        ],
+        [
+            KeyboardButton("🏠 القائمة الرئيسية"),
+            KeyboardButton("🔙 لوحة الأدمن"),
+        ],
+    ])
+
+
+def post_editor_keyboard():
+    return keyboard([
+        [
+            KeyboardButton("➕ إضافة محتوى"),
+            KeyboardButton("✏️ تعديل محتوى"),
+        ],
+        [
+            KeyboardButton("🗑 حذف محتوى"),
+            KeyboardButton("📋 عرض المحتوى"),
+        ],
+        [
+            KeyboardButton("🏠 القائمة الرئيسية"),
+            KeyboardButton("🔙 لوحة الأدمن"),
+        ],
+    ])
+
+
+def back_keyboard():
+    return keyboard([
+        [
+            KeyboardButton("🔙 رجوع"),
+            KeyboardButton("🏠 القائمة الرئيسية"),
+        ]
+    ])
+
+
+def cancel_keyboard():
+    return keyboard([
+        [
+            KeyboardButton("❌ إلغاء"),
+        ]
+    ])
 
 
 # =========================================================
-# BUTTON EDITOR MENU
+# NAVIGATION
 # =========================================================
 
-def editor_keyboard():
+def get_children(parent_id):
+    with closing(get_db()) as conn:
+        return conn.execute("""
+            SELECT id, title
+            FROM buttons
+            WHERE parent_id = ?
+            ORDER BY position, id
+        """, (parent_id,)).fetchall()
 
-    return ReplyKeyboardMarkup(
-        [
-            [
-                KeyboardButton("➕ إضافة زر")
-            ],
-            [
-                KeyboardButton("📝 إضافة نص"),
-                KeyboardButton("📄 إضافة PDF")
-            ],
-            [
-                KeyboardButton("🖼 إضافة صورة"),
-                KeyboardButton("🎬 إضافة فيديو")
-            ],
-            [
-                KeyboardButton("✏️ تعديل محتوى"),
-                KeyboardButton("🗑 حذف زر")
-            ],
-            [
-                KeyboardButton("📋 عرض الأزرار")
-            ],
-            [
-                KeyboardButton("🔙 لوحة الأدمن")
-            ]
-        ],
-        resize_keyboard=True
+
+def get_button(button_id):
+    with closing(get_db()) as conn:
+        return conn.execute("""
+            SELECT id, parent_id, title, position
+            FROM buttons
+            WHERE id = ?
+        """, (button_id,)).fetchone()
+
+
+def get_button_path(parent_id):
+    if parent_id == 0:
+        return []
+
+    path = []
+    current = parent_id
+
+    while current:
+        row = get_button(current)
+        if not row:
+            break
+        path.append(row)
+        current = row[1]
+
+    path.reverse()
+    return path
+
+
+def navigation_keyboard(parent_id, user_id):
+    rows = []
+
+    children = get_children(parent_id)
+
+    for i in range(0, len(children), 2):
+        row = [KeyboardButton(children[i][1])]
+        if i + 1 < len(children):
+            row.append(KeyboardButton(children[i + 1][1]))
+        rows.append(row)
+
+    if parent_id != 0:
+        row = get_button(parent_id)
+        previous_id = row[1] if row else 0
+        rows.append([
+            KeyboardButton("🔙 رجوع"),
+            KeyboardButton("🏠 القائمة الرئيسية"),
+        ])
+    else:
+        rows.append([
+            KeyboardButton("🏠 القائمة الرئيسية"),
+        ])
+
+    return keyboard(rows)
+
+
+async def show_section(update, context, parent_id=0):
+    context.user_data["parent_id"] = parent_id
+    context.user_data.pop("state", None)
+    context.user_data.pop("selected_button", None)
+
+    children = get_children(parent_id)
+
+    if parent_id == 0:
+        title = "📚 المواد الدراسية"
+    else:
+        row = get_button(parent_id)
+        title = row[2] if row else "القسم"
+
+    if not children:
+        await update.message.reply_text(
+            f"📂 {title}\n\nلا توجد أزرار مضافة داخل هذا القسم حالياً.",
+            reply_markup=navigation_keyboard(parent_id, update.effective_user.id),
+        )
+        return
+
+    await update.message.reply_text(
+        f"📂 {title}\n\nاختر من القائمة:",
+        reply_markup=navigation_keyboard(parent_id, update.effective_user.id),
     )
+
+
+async def open_dynamic_button(update, context, button):
+    button_id, parent_id, title, _ = button
+
+    children = get_children(button_id)
+
+    if children:
+        await show_section(update, context, button_id)
+        return
+
+    with closing(get_db()) as conn:
+        post = conn.execute("""
+            SELECT content_type, text_content, file_id, caption
+            FROM posts
+            WHERE button_id = ?
+        """, (button_id,)).fetchone()
+
+    if not post:
+        await update.message.reply_text(
+            f"📌 {title}\n\nلا يوجد محتوى مضاف لهذا الزر حالياً.",
+            reply_markup=navigation_keyboard(parent_id, update.effective_user.id),
+        )
+        return
+
+    content_type, text_content, file_id, caption = post
+
+    context.user_data["parent_id"] = parent_id
+
+    if content_type == "text":
+        await update.message.reply_text(
+            text_content or "",
+            reply_markup=back_keyboard(),
+        )
+
+    elif content_type == "photo":
+        await update.message.reply_photo(
+            photo=file_id,
+            caption=caption or "",
+            reply_markup=back_keyboard(),
+        )
+
+    elif content_type == "video":
+        await update.message.reply_video(
+            video=file_id,
+            caption=caption or "",
+            reply_markup=back_keyboard(),
+        )
+
+    elif content_type == "document":
+        await update.message.reply_document(
+            document=file_id,
+            caption=caption or "",
+            reply_markup=back_keyboard(),
+        )
 
 
 # =========================================================
 # START
 # =========================================================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user = update.effective_user
-    save_user(user)
-
+async def start(update, context):
+    save_user(update.effective_user)
     context.user_data.clear()
 
     if (
         get_setting("maintenance") == "1"
-        and not is_admin(user.id)
+        and not is_admin(update.effective_user.id)
     ):
         await update.message.reply_text(
             get_setting("maintenance_message"),
-            reply_markup=ReplyKeyboardMarkup(
-                [[KeyboardButton("🔄 تحديث")]],
-                resize_keyboard=True
-            )
+            reply_markup=keyboard([[KeyboardButton("🔄 تحديث")]]),
         )
         return
 
     await update.message.reply_text(
         get_setting("start_message"),
-        reply_markup=main_keyboard(user.id)
+        reply_markup=main_keyboard(update.effective_user.id),
     )
 
 
@@ -350,137 +492,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================================================
 
 async def admin_panel(update, context):
-
     if not is_admin(update.effective_user.id):
         return
 
     context.user_data.clear()
 
     await update.message.reply_text(
-        "⚙️ لوحة تحكم البوت\n\n"
-        "اختر القسم المطلوب:",
-        reply_markup=admin_keyboard()
-    )
-
-
-# =========================================================
-# STATISTICS
-# =========================================================
-
-async def statistics(update, context):
-
-    if not is_admin(update.effective_user.id):
-        return
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("SELECT COUNT(*) FROM users")
-    users = cur.fetchone()[0]
-
-    cur.execute("SELECT COUNT(*) FROM buttons")
-    buttons = cur.fetchone()[0]
-
-    cur.execute("SELECT COUNT(*) FROM channels")
-    channels = cur.fetchone()[0]
-
-    conn.close()
-
-    status = (
-        "🛠 وضع الصيانة"
-        if get_setting("maintenance") == "1"
-        else "🟢 يعمل"
-    )
-
-    await update.message.reply_text(
-        f"""
-📊 إحصائيات البوت
-
-👥 المشتركون: {users}
-🔘 الأزرار: {buttons}
-📢 القنوات والمجموعات: {channels}
-
-🤖 الحالة: {status}
-""",
-        reply_markup=admin_keyboard()
-    )
-
-
-# =========================================================
-# SUBSCRIBERS
-# =========================================================
-
-async def subscribers(update, context):
-
-    if not is_admin(update.effective_user.id):
-        return
-
-    users = get_users()
-
-    await update.message.reply_text(
-        f"👥 عدد المشتركين:\n\n"
-        f"🔢 {len(users)} مستخدم",
-        reply_markup=admin_keyboard()
-    )
-
-
-# =========================================================
-# MAINTENANCE
-# =========================================================
-
-async def maintenance(update, context):
-
-    if not is_admin(update.effective_user.id):
-        return
-
-    current = get_setting("maintenance")
-
-    if current == "1":
-        set_setting("maintenance", "0")
-
-        await update.message.reply_text(
-            "🟢 تم إيقاف وضع الصيانة.",
-            reply_markup=admin_keyboard()
-        )
-
-    else:
-        set_setting("maintenance", "1")
-
-        await update.message.reply_text(
-            "🛠 تم تفعيل وضع الصيانة.",
-            reply_markup=admin_keyboard()
-        )
-
-
-# =========================================================
-# START MESSAGE
-# =========================================================
-
-async def edit_start_message(update, context):
-
-    if not is_admin(update.effective_user.id):
-        return
-
-    context.user_data["state"] = "start_message"
-
-    await update.message.reply_text(
-        "✏️ أرسل رسالة البدء الجديدة:"
-    )
-
-
-# =========================================================
-# MAINTENANCE MESSAGE
-# =========================================================
-
-async def edit_maintenance_message(update, context):
-
-    if not is_admin(update.effective_user.id):
-        return
-
-    context.user_data["state"] = "maintenance_message"
-
-    await update.message.reply_text(
-        "🔧 أرسل رسالة الصيانة الجديدة:"
+        "⚙️ لوحة الأدمن\n\nاختر القسم المطلوب:",
+        reply_markup=admin_keyboard(),
     )
 
 
@@ -489,434 +508,249 @@ async def edit_maintenance_message(update, context):
 # =========================================================
 
 async def button_editor(update, context):
-
     if not is_admin(update.effective_user.id):
         return
 
     context.user_data.clear()
 
     await update.message.reply_text(
-        "🔘 محرر الأزرار المتقدم\n\n"
-        "يمكنك إنشاء زر وربطه بنص أو PDF أو صورة أو فيديو.\n\n"
-        "اختر العملية:",
-        reply_markup=editor_keyboard()
+        "🔘 محرر الأزرار\n\n"
+        "هذا القسم خاص بإنشاء وإدارة الأزرار والقوائم فقط.\n\n"
+        "أما النصوص والملفات والصور والفيديوهات فتدار من محرر المشاركات.",
+        reply_markup=button_editor_keyboard(),
     )
 
 
-# =========================================================
-# ADD BUTTON
-# =========================================================
-
-async def add_button(update, context):
-
-    if not is_admin(update.effective_user.id):
-        return
-
-    context.user_data["state"] = "add_button"
+async def add_button_start(update, context):
+    context.user_data["state"] = "add_button_title"
+    context.user_data["button_parent"] = 0
 
     await update.message.reply_text(
-        "🔘 أرسل اسم الزر الجديد:"
+        "➕ أرسل اسم الزر الجديد.\n\n"
+        "بعدها سيطلب منك اختيار مكانه.",
+        reply_markup=cancel_keyboard(),
     )
 
 
-# =========================================================
-# ADD CONTENT TYPE
-# =========================================================
-
-async def choose_content_type(update, context, content_type):
-
-    if not is_admin(update.effective_user.id):
-        return
-
-    context.user_data["content_type"] = content_type
-    context.user_data["state"] = "content"
-
-    messages = {
-        "text": "📝 أرسل النص الذي سيظهر عند الضغط على الزر:",
-        "pdf": "📄 أرسل ملف PDF الآن:",
-        "photo": "🖼 أرسل الصورة الآن:",
-        "video": "🎬 أرسل الفيديو الآن:"
-    }
-
-    await update.message.reply_text(
-        messages[content_type]
-    )
-
-
-# =========================================================
-# SAVE BUTTON
-# =========================================================
-
-def create_button(title, content_type, content=None, file_id=None):
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        INSERT INTO buttons
-        (parent_id, title, content_type, content, file_id)
-        VALUES (?, ?, ?, ?, ?)
-    """, (
-        0,
-        title,
-        content_type,
-        content,
-        file_id
-    ))
-
-    conn.commit()
-    conn.close()
-
-
-# =========================================================
-# SHOW USER BUTTONS
-# =========================================================
-
-async def show_dynamic_buttons(update, context):
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT id, title
-        FROM buttons
-        WHERE parent_id=0
-        ORDER BY id ASC
-    """)
-
-    buttons = cur.fetchall()
-    conn.close()
+async def edit_button_start(update, context):
+    buttons = get_children(0)
 
     if not buttons:
-
         await update.message.reply_text(
-            "📂 لا توجد أقسام مضافة حالياً.",
-            reply_markup=main_keyboard(
-                update.effective_user.id
-            )
+            "لا توجد أزرار لتعديلها.",
+            reply_markup=button_editor_keyboard(),
         )
         return
 
-    keyboard = []
-
-    for button_id, title in buttons:
-
-        keyboard.append([
-            InlineKeyboardButton(
-                title,
-                callback_data=f"content:{button_id}"
-            )
-        ])
-
-    keyboard.append([
-        InlineKeyboardButton(
-            "🏠 الرئيسية",
-            callback_data="home"
-        )
-    ])
+    context.user_data["state"] = "choose_edit_button"
 
     await update.message.reply_text(
-        "📚 الأقسام الدراسية:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        "✏️ اختر الزر الذي تريد تعديله:",
+        reply_markup=keyboard(
+            [[KeyboardButton(title)] for _, title in buttons]
+            + [[KeyboardButton("❌ إلغاء")]]
+        ),
     )
 
-
-# =========================================================
-# CONTENT CALLBACK
-# =========================================================
-
-async def content_callback(update, context):
-
-    query = update.callback_query
-    await query.answer()
-
-    data = query.data
-
-    if data == "home":
-
-        await query.message.delete()
-
-        await query.message.chat.send_message(
-            get_setting("start_message"),
-            reply_markup=main_keyboard(
-                query.from_user.id
-            )
-        )
-
-        return
-
-    if not data.startswith("content:"):
-        return
-
-    button_id = int(data.split(":")[1])
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT title, content_type, content, file_id
-        FROM buttons
-        WHERE id=?
-    """, (button_id,))
-
-    row = cur.fetchone()
-    conn.close()
-
-    if not row:
-        return
-
-    title, content_type, content, file_id = row
-
-    if content_type == "text":
-
-        await query.message.reply_text(
-            f"📖 {title}\n\n{content}"
-        )
-
-    elif content_type == "pdf":
-
-        await query.message.reply_document(
-            document=file_id,
-            caption=title
-        )
-
-    elif content_type == "photo":
-
-        await query.message.reply_photo(
-            photo=file_id,
-            caption=title
-        )
-
-    elif content_type == "video":
-
-        await query.message.reply_video(
-            video=file_id,
-            caption=title
-        )
-
-
-# =========================================================
-# LIST BUTTONS
-# =========================================================
-
-async def list_buttons(update, context):
-
-    if not is_admin(update.effective_user.id):
-        return
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT id, title, content_type
-        FROM buttons
-        ORDER BY id ASC
-    """)
-
-    rows = cur.fetchall()
-    conn.close()
-
-    if not rows:
-
-        await update.message.reply_text(
-            "🔘 لا توجد أزرار حالياً.",
-            reply_markup=editor_keyboard()
-        )
-        return
-
-    text = "📋 الأزرار الموجودة:\n\n"
-
-    for button_id, title, content_type in rows:
-
-        type_names = {
-            "menu": "📁 قائمة",
-            "text": "📝 نص",
-            "pdf": "📄 PDF",
-            "photo": "🖼 صورة",
-            "video": "🎬 فيديو"
-        }
-
-        text += (
-            f"#{button_id} — {title}\n"
-            f"النوع: {type_names.get(content_type, content_type)}\n\n"
-        )
-
-    await update.message.reply_text(
-        text,
-        reply_markup=editor_keyboard()
-    )
-
-
-# =========================================================
-# DELETE BUTTON
-# =========================================================
 
 async def delete_button_start(update, context):
+    buttons = get_children(0)
 
-    if not is_admin(update.effective_user.id):
+    if not buttons:
+        await update.message.reply_text(
+            "🗑 لا توجد أزرار لحذفها.",
+            reply_markup=button_editor_keyboard(),
+        )
         return
 
-    context.user_data["state"] = "delete_button"
+    context.user_data["state"] = "choose_delete_button"
 
     await update.message.reply_text(
-        "🗑 أرسل رقم الزر الذي تريد حذفه:"
+        "🗑 اختر الزر الذي تريد حذفه:",
+        reply_markup=keyboard(
+            [[KeyboardButton(title)] for _, title in buttons]
+            + [[KeyboardButton("❌ إلغاء")]]
+        ),
     )
 
 
-def delete_button(button_id):
+async def confirm_delete(update, context, button_id):
+    row = get_button(button_id)
 
-    conn = db()
-    cur = conn.cursor()
+    if not row:
+        await update.message.reply_text(
+            "❌ الزر غير موجود.",
+            reply_markup=button_editor_keyboard(),
+        )
+        context.user_data.clear()
+        return
 
-    cur.execute(
-        "DELETE FROM buttons WHERE id=?",
-        (button_id,)
+    context.user_data["delete_id"] = button_id
+    context.user_data["state"] = "confirm_delete"
+
+    await update.message.reply_text(
+        f"⚠️ تأكيد الحذف\n\n"
+        f"هل تريد حذف الزر:\n"
+        f"« {row[2]} » ؟\n\n"
+        f"سيتم حذف محتواه وجميع أزراره الفرعية أيضاً.",
+        reply_markup=keyboard([
+            [KeyboardButton("✅ نعم، حذف")],
+            [KeyboardButton("❌ إلغاء")],
+        ]),
     )
 
-    deleted = cur.rowcount > 0
 
-    conn.commit()
-    conn.close()
+def delete_tree(button_id):
+    with closing(get_db()) as conn:
+        cur = conn.cursor()
 
-    return deleted
+        children = cur.execute(
+            "SELECT id FROM buttons WHERE parent_id = ?",
+            (button_id,),
+        ).fetchall()
+
+        for (child_id,) in children:
+            delete_tree_with_cursor(cur, child_id)
+
+        cur.execute("DELETE FROM posts WHERE button_id = ?", (button_id,))
+        cur.execute("DELETE FROM buttons WHERE id = ?", (button_id,))
+        conn.commit()
+
+
+def delete_tree_with_cursor(cur, button_id):
+    children = cur.execute(
+        "SELECT id FROM buttons WHERE parent_id = ?",
+        (button_id,),
+    ).fetchall()
+
+    for (child_id,) in children:
+        delete_tree_with_cursor(cur, child_id)
+
+    cur.execute("DELETE FROM posts WHERE button_id = ?", (button_id,))
+    cur.execute("DELETE FROM buttons WHERE id = ?", (button_id,))
 
 
 # =========================================================
-# BROADCAST
+# POST EDITOR
 # =========================================================
 
-async def broadcast_start(update, context):
-
+async def post_editor(update, context):
     if not is_admin(update.effective_user.id):
         return
-
-    context.user_data["state"] = "broadcast"
-
-    await update.message.reply_text(
-        "📢 أرسل الرسالة الجماعية الآن:"
-    )
-
-
-async def broadcast(update, context):
-
-    if not is_admin(update.effective_user.id):
-        return
-
-    message = update.message.text
-    users = get_users()
-
-    sent = 0
-    failed = 0
-
-    for user_id in users:
-
-        try:
-
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=message
-            )
-
-            sent += 1
-
-        except Exception:
-
-            failed += 1
 
     context.user_data.clear()
 
     await update.message.reply_text(
-        f"""
-📢 اكتمل الإرسال الجماعي.
-
-✅ نجح: {sent}
-❌ فشل: {failed}
-👥 الإجمالي: {len(users)}
-""",
-        reply_markup=admin_keyboard()
+        "📝 محرر المشاركات\n\n"
+        "هذا القسم خاص بمحتوى الأزرار.\n"
+        "يمكنك ربط الزر بنص أو PDF أو صورة أو فيديو.",
+        reply_markup=post_editor_keyboard(),
     )
 
 
-# =========================================================
-# ADMINS
-# =========================================================
+def all_buttons():
+    with closing(get_db()) as conn:
+        return conn.execute("""
+            SELECT id, title, parent_id
+            FROM buttons
+            ORDER BY position, id
+        """).fetchall()
 
-async def admins(update, context):
 
-    if not is_admin(update.effective_user.id):
+async def select_post_button(update, context, action):
+    buttons = all_buttons()
+
+    if not buttons:
+        await update.message.reply_text(
+            "❌ لا توجد أزرار. أنشئ الأزرار أولاً من محرر الأزرار.",
+            reply_markup=post_editor_keyboard(),
+        )
         return
 
-    conn = db()
-    cur = conn.cursor()
+    context.user_data["state"] = action
 
-    cur.execute(
-        "SELECT user_id FROM admins"
-    )
+    rows = []
+    for button_id, title, parent_id in buttons:
+        rows.append([
+            KeyboardButton(f"{title} 〔{button_id}〕")
+        ])
 
-    rows = cur.fetchall()
-    conn.close()
-
-    text = "👮 المشرفون:\n\n"
-
-    for (user_id,) in rows:
-        text += f"🆔 {user_id}\n"
+    rows.append([KeyboardButton("❌ إلغاء")])
 
     await update.message.reply_text(
-        text,
-        reply_markup=admin_keyboard()
+        "اختر الزر الذي تريد التعامل مع محتواه:",
+        reply_markup=keyboard(rows),
     )
 
 
+async def add_content_start(update, context):
+    await select_post_button(update, context, "select_post_add")
+
+
+async def edit_content_start(update, context):
+    await select_post_button(update, context, "select_post_edit")
+
+
+async def delete_content_start(update, context):
+    await select_post_button(update, context, "select_post_delete")
+
+
+def parse_button_choice(text):
+    if "〔" not in text or "〕" not in text:
+        return None
+
+    try:
+        return int(text.rsplit("〔", 1)[1].split("〕", 1)[0])
+    except (ValueError, IndexError):
+        return None
+
+
 # =========================================================
-# CHANNELS
+# CONTENT SAVING
 # =========================================================
 
-async def channels(update, context):
-
-    if not is_admin(update.effective_user.id):
-        return
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT chat_id, title, username
-        FROM channels
-        ORDER BY id DESC
-    """)
-
-    rows = cur.fetchall()
-    conn.close()
-
-    text = "📢 القنوات والمجموعات:\n\n"
-
-    if not rows:
-        text += "لا توجد قنوات أو مجموعات مضافة."
-
-    else:
-
-        for chat_id, title, username in rows:
-
-            text += f"📌 {title or 'بدون اسم'}\n"
-            text += f"🆔 {chat_id}\n"
-
-            if username:
-                text += f"🔗 @{username}\n"
-
-            text += "\n"
+async def ask_content_type(update, context):
+    context.user_data["state"] = "choose_content_type"
 
     await update.message.reply_text(
-        text,
-        reply_markup=admin_keyboard()
+        "اختر نوع المحتوى:",
+        reply_markup=keyboard([
+            [
+                KeyboardButton("📝 نص"),
+                KeyboardButton("📄 PDF"),
+            ],
+            [
+                KeyboardButton("🖼 صورة"),
+                KeyboardButton("🎬 فيديو"),
+            ],
+            [
+                KeyboardButton("❌ إلغاء"),
+            ],
+        ]),
     )
 
 
+async def save_post(button_id, content_type, text=None, file_id=None, caption=None):
+    with closing(get_db()) as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO posts
+            (button_id, content_type, text_content, file_id, caption)
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            button_id,
+            content_type,
+            text,
+            file_id,
+            caption,
+        ))
+        conn.commit()
+
+
 # =========================================================
-# NEWS EDITOR
+# NEWS
 # =========================================================
 
 async def news_editor(update, context):
-
     if not is_admin(update.effective_user.id):
         return
 
@@ -924,594 +758,976 @@ async def news_editor(update, context):
 
     await update.message.reply_text(
         "📰 محرر الأخبار\n\n"
-        "أرسل نص الخبر أو الإعلان الآن:"
+        "أرسل الخبر الجديد، وسيتم حفظه ليكون جاهزاً للنشر.",
+        reply_markup=cancel_keyboard(),
     )
 
 
 # =========================================================
-# TEXT EDITOR
+# BROADCAST
 # =========================================================
 
-async def text_editor(update, context):
-
+async def broadcast_start(update, context):
     if not is_admin(update.effective_user.id):
         return
 
-    context.user_data["state"] = "editor_text"
+    context.user_data["state"] = "broadcast"
 
     await update.message.reply_text(
-        "✏️ المحرر النصي\n\n"
-        "أرسل النص الذي تريد حفظه:"
+        "📢 أرسل الرسالة التي تريد إرسالها لجميع المشتركين.",
+        reply_markup=cancel_keyboard(),
+    )
+
+
+async def do_broadcast(update, context):
+    users = get_all_users()
+    sent = 0
+    failed = 0
+
+    for user_id in users:
+        try:
+            await update.message.copy(chat_id=user_id)
+            sent += 1
+        except Exception:
+            failed += 1
+
+    context.user_data.clear()
+
+    await update.message.reply_text(
+        f"📢 اكتمل الإرسال الجماعي.\n\n"
+        f"✅ نجح: {sent}\n"
+        f"❌ فشل: {failed}\n"
+        f"👥 الإجمالي: {len(users)}",
+        reply_markup=admin_keyboard(),
     )
 
 
 # =========================================================
-# HANDLE MEDIA
+# ADMINS / CHANNELS
 # =========================================================
 
-async def handle_media(update, context):
-
+async def admins(update, context):
     if not is_admin(update.effective_user.id):
+        return
+
+    with closing(get_db()) as conn:
+        rows = conn.execute(
+            "SELECT user_id FROM admins ORDER BY user_id"
+        ).fetchall()
+
+    text = "👮 إعداد المشرفين\n\n"
+    for user_id, in rows:
+        text += f"🆔 {user_id}\n"
+
+    text += "\nلإضافة مشرف استخدم الصيغة:\n+ 123456789"
+    text += "\nلحذف مشرف:\n- 123456789"
+
+    context.user_data["state"] = "admin_manage"
+
+    await update.message.reply_text(
+        text,
+        reply_markup=keyboard([
+            [KeyboardButton("🔙 لوحة الأدمن")],
+        ]),
+    )
+
+
+async def channels(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+
+    with closing(get_db()) as conn:
+        rows = conn.execute("""
+            SELECT chat_id, title, username
+            FROM channels
+            ORDER BY id DESC
+        """).fetchall()
+
+    text = "📢 قنوات ومجموعات\n\n"
+
+    if not rows:
+        text += "لا توجد قنوات أو مجموعات محفوظة."
+    else:
+        for chat_id, title, username in rows:
+            text += f"📌 {title or 'بدون اسم'}\n🆔 {chat_id}\n"
+            if username:
+                text += f"🔗 @{username}\n"
+            text += "\n"
+
+    text += "\nلإضافة قناة/مجموعة:\nأرسل + ثم ID ثم الاسم، مثال:\n+ -1001234567890 قناتي"
+
+    context.user_data["state"] = "channel_manage"
+
+    await update.message.reply_text(
+        text,
+        reply_markup=keyboard([
+            [KeyboardButton("🔙 لوحة الأدمن")],
+        ]),
+    )
+
+
+# =========================================================
+# SETTINGS
+# =========================================================
+
+async def bot_settings(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+
+    await update.message.reply_text(
+        "⚙️ إعدادات البوت\n\n"
+        "✏️ رسالة البدء\n"
+        "🔧 رسالة الصيانة\n"
+        "🛠 تشغيل/إيقاف وضع الصيانة",
+        reply_markup=keyboard([
+            [KeyboardButton("✏️ رسالة البدء")],
+            [KeyboardButton("🔧 رسالة الصيانة")],
+            [KeyboardButton("🛠 وضع الصيانة")],
+            [KeyboardButton("🔙 لوحة الأدمن")],
+        ]),
+    )
+
+
+async def edit_start_message(update, context):
+    context.user_data["state"] = "edit_start"
+    await update.message.reply_text(
+        "✏️ أرسل رسالة /start الجديدة:",
+        reply_markup=cancel_keyboard(),
+    )
+
+
+async def edit_maintenance_message(update, context):
+    context.user_data["state"] = "edit_maintenance"
+    await update.message.reply_text(
+        "🔧 أرسل رسالة الصيانة الجديدة:",
+        reply_markup=cancel_keyboard(),
+    )
+
+
+async def toggle_maintenance(update, context):
+    value = get_setting("maintenance")
+
+    if value == "1":
+        set_setting("maintenance", "0")
+        text = "🟢 تم إيقاف وضع الصيانة."
+    else:
+        set_setting("maintenance", "1")
+        text = "🛠 تم تفعيل وضع الصيانة."
+
+    await update.message.reply_text(
+        text,
+        reply_markup=admin_keyboard(),
+    )
+
+
+# =========================================================
+# SEARCH
+# =========================================================
+
+async def search_start(update, context):
+    context.user_data["state"] = "search"
+
+    await update.message.reply_text(
+        "🔍 أرسل اسم المادة أو المحاضرة أو الملخص الذي تبحث عنه:",
+        reply_markup=keyboard([
+            [KeyboardButton("❌ إلغاء")],
+        ]),
+    )
+
+
+async def perform_search(update, context, query):
+    query = query.strip()
+
+    with closing(get_db()) as conn:
+        rows = conn.execute("""
+            SELECT id, title, parent_id
+            FROM buttons
+            WHERE title LIKE ?
+            ORDER BY position, id
+            LIMIT 30
+        """, (f"%{query}%",)).fetchall()
+
+    if not rows:
+        await update.message.reply_text(
+            "❌ لم يتم العثور على نتائج.",
+            reply_markup=main_keyboard(update.effective_user.id),
+        )
+        context.user_data.clear()
+        return
+
+    keyboard_rows = [
+        [KeyboardButton(f"{title} 〔{button_id}〕")]
+        for button_id, title, _ in rows
+    ]
+
+    keyboard_rows.append([
+        KeyboardButton("🏠 القائمة الرئيسية")
+    ])
+
+    context.user_data["search_results"] = {
+        button_id: (button_id, parent_id)
+        for button_id, title, parent_id in rows
+    }
+
+    await update.message.reply_text(
+        f"🔍 نتائج البحث عن: {query}",
+        reply_markup=keyboard(keyboard_rows),
+    )
+
+
+# =========================================================
+# MAIN TEXT HANDLER
+# =========================================================
+
+async def handle_text(update, context):
+    if not update.message:
+        return
+
+    user = update.effective_user
+    user_id = user.id
+    text = update.message.text.strip()
+
+    save_user(user)
+
+    # Maintenance for normal users
+    if (
+        get_setting("maintenance") == "1"
+        and not is_admin(user_id)
+        and text != "🔄 تحديث"
+    ):
+        await update.message.reply_text(
+            get_setting("maintenance_message"),
+            reply_markup=keyboard([[KeyboardButton("🔄 تحديث")]]),
+        )
         return
 
     state = context.user_data.get("state")
 
-    if state != "content":
+    # -----------------------------------------------------
+    # CANCEL
+    # -----------------------------------------------------
+
+    if text == "❌ إلغاء":
+        context.user_data.clear()
+
+        if is_admin(user_id):
+            await update.message.reply_text(
+                "❌ تم الإلغاء.",
+                reply_markup=admin_keyboard(),
+            )
+        else:
+            await update.message.reply_text(
+                "❌ تم الإلغاء.",
+                reply_markup=main_keyboard(user_id),
+            )
         return
 
-    content_type = context.user_data.get(
-        "content_type"
-    )
+    # -----------------------------------------------------
+    # ADMIN STATES
+    # -----------------------------------------------------
 
-    title = context.user_data.get(
-        "button_title",
-        "محتوى جديد"
-    )
+    if is_admin(user_id):
 
-    file_id = None
+        if state == "add_button_title":
+            context.user_data["new_title"] = text
+            context.user_data["state"] = "choose_parent"
 
-    if content_type == "pdf" and update.message.document:
+            buttons = all_buttons()
 
-        file_id = update.message.document.file_id
+            rows = [[KeyboardButton("🏠 القائمة الرئيسية")]]
+            for button_id, title, parent_id in buttons:
+                rows.append([
+                    KeyboardButton(f"{title} 〔{button_id}〕")
+                ])
 
-    elif content_type == "photo" and update.message.photo:
+            rows.append([KeyboardButton("❌ إلغاء")])
 
-        file_id = update.message.photo[-1].file_id
+            await update.message.reply_text(
+                "📁 اختر مكان الزر الجديد:",
+                reply_markup=keyboard(rows),
+            )
+            return
 
-    elif content_type == "video" and update.message.video:
+        if state == "choose_parent":
+            if text == "🏠 القائمة الرئيسية":
+                parent_id = 0
+            else:
+                parent_id = parse_button_choice(text)
 
-        file_id = update.message.video.file_id
+                if parent_id is None:
+                    await update.message.reply_text(
+                        "❌ اختر أحد الأزرار الظاهرة."
+                    )
+                    return
 
-    else:
+            title = context.user_data.get("new_title", "زر جديد")
+
+            with closing(get_db()) as conn:
+                position = conn.execute(
+                    "SELECT COALESCE(MAX(position), -1) + 1 "
+                    "FROM buttons WHERE parent_id = ?",
+                    (parent_id,),
+                ).fetchone()[0]
+
+                conn.execute("""
+                    INSERT INTO buttons(parent_id, title, position)
+                    VALUES (?, ?, ?)
+                """, (parent_id, title, position))
+
+                conn.commit()
+
+            context.user_data.clear()
+
+            await update.message.reply_text(
+                f"✅ تمت إضافة الزر:\n« {title} »",
+                reply_markup=button_editor_keyboard(),
+            )
+            return
+
+        if state == "choose_delete_button":
+            button_id = parse_button_choice(text)
+
+            if button_id is None:
+                await update.message.reply_text(
+                    "❌ اختر الزر من القائمة."
+                )
+                return
+
+            await confirm_delete(update, context, button_id)
+            return
+
+        if state == "confirm_delete":
+            if text == "✅ نعم، حذف":
+                button_id = context.user_data.get("delete_id")
+
+                if button_id:
+                    delete_tree(button_id)
+
+                context.user_data.clear()
+
+                await update.message.reply_text(
+                    "🗑 تم حذف الزر ومحتواه وأزراره الفرعية.",
+                    reply_markup=button_editor_keyboard(),
+                )
+                return
+
+            if text == "❌ إلغاء":
+                context.user_data.clear()
+                await update.message.reply_text(
+                    "❌ تم إلغاء الحذف.",
+                    reply_markup=button_editor_keyboard(),
+                )
+                return
+
+        if state == "choose_edit_button":
+            button_id = parse_button_choice(text)
+
+            if button_id is None:
+                await update.message.reply_text(
+                    "❌ اختر الزر من القائمة."
+                )
+                return
+
+            row = get_button(button_id)
+
+            if not row:
+                context.user_data.clear()
+                await update.message.reply_text(
+                    "❌ الزر غير موجود.",
+                    reply_markup=button_editor_keyboard(),
+                )
+                return
+
+            context.user_data["edit_button_id"] = button_id
+            context.user_data["state"] = "edit_button_title"
+
+            await update.message.reply_text(
+                f"✏️ الاسم الحالي:\n{row[2]}\n\n"
+                f"أرسل الاسم الجديد:",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+
+        if state == "edit_button_title":
+            button_id = context.user_data.get("edit_button_id")
+
+            with closing(get_db()) as conn:
+                conn.execute(
+                    "UPDATE buttons SET title = ? WHERE id = ?",
+                    (text, button_id),
+                )
+                conn.commit()
+
+            context.user_data.clear()
+
+            await update.message.reply_text(
+                "✅ تم تعديل اسم الزر.",
+                reply_markup=button_editor_keyboard(),
+            )
+            return
+
+        # POST EDITOR
+        if state in ("select_post_add", "select_post_edit", "select_post_delete"):
+            button_id = parse_button_choice(text)
+
+            if button_id is None:
+                await update.message.reply_text(
+                    "❌ اختر الزر من القائمة."
+                )
+                return
+
+            if state == "select_post_add":
+                context.user_data["selected_button"] = button_id
+                await ask_content_type(update, context)
+                return
+
+            if state == "select_post_edit":
+                context.user_data["selected_button"] = button_id
+                await ask_content_type(update, context)
+                return
+
+            if state == "select_post_delete":
+                with closing(get_db()) as conn:
+                    post = conn.execute(
+                        "SELECT id FROM posts WHERE button_id = ?",
+                        (button_id,),
+                    ).fetchone()
+
+                if not post:
+                    context.user_data.clear()
+                    await update.message.reply_text(
+                        "❌ هذا الزر لا يحتوي على محتوى.",
+                        reply_markup=post_editor_keyboard(),
+                    )
+                    return
+
+                context.user_data["delete_post_button"] = button_id
+                context.user_data["state"] = "confirm_delete_post"
+
+                await update.message.reply_text(
+                    "⚠️ تأكيد حذف المحتوى\n\n"
+                    "هل تريد حذف محتوى هذا الزر؟",
+                    reply_markup=keyboard([
+                        [KeyboardButton("✅ نعم، حذف")],
+                        [KeyboardButton("❌ إلغاء")],
+                    ]),
+                )
+                return
+
+        if state == "confirm_delete_post":
+            if text == "✅ نعم، حذف":
+                button_id = context.user_data.get("delete_post_button")
+
+                with closing(get_db()) as conn:
+                    conn.execute(
+                        "DELETE FROM posts WHERE button_id = ?",
+                        (button_id,),
+                    )
+                    conn.commit()
+
+                context.user_data.clear()
+
+                await update.message.reply_text(
+                    "🗑 تم حذف المحتوى.",
+                    reply_markup=post_editor_keyboard(),
+                )
+                return
+
+        if state == "choose_content_type":
+            types = {
+                "📝 نص": "text",
+                "📄 PDF": "document",
+                "🖼 صورة": "photo",
+                "🎬 فيديو": "video",
+            }
+
+            content_type = types.get(text)
+
+            if not content_type:
+                await update.message.reply_text(
+                    "❌ اختر نوع المحتوى من القائمة."
+                )
+                return
+
+            context.user_data["content_type"] = content_type
+
+            if content_type == "text":
+                context.user_data["state"] = "content_text"
+
+                await update.message.reply_text(
+                    "📝 أرسل النص الذي سيظهر عند الضغط على الزر:",
+                    reply_markup=cancel_keyboard(),
+                )
+            else:
+                context.user_data["state"] = "content_media"
+
+                names = {
+                    "document": "📄 أرسل ملف PDF:",
+                    "photo": "🖼 أرسل الصورة:",
+                    "video": "🎬 أرسل الفيديو:",
+                }
+
+                await update.message.reply_text(
+                    names[content_type],
+                    reply_markup=cancel_keyboard(),
+                )
+            return
+
+        if state == "content_text":
+            button_id = context.user_data.get("selected_button")
+
+            await save_post(
+                button_id,
+                "text",
+                text=text,
+            )
+
+            context.user_data.clear()
+
+            await update.message.reply_text(
+                "✅ تم حفظ النص وربطه بالزر.",
+                reply_markup=post_editor_keyboard(),
+            )
+            return
+
+        if state == "edit_start":
+            set_setting("start_message", text)
+            context.user_data.clear()
+
+            await update.message.reply_text(
+                "✅ تم تحديث رسالة /start.",
+                reply_markup=admin_keyboard(),
+            )
+            return
+
+        if state == "edit_maintenance":
+            set_setting("maintenance_message", text)
+            context.user_data.clear()
+
+            await update.message.reply_text(
+                "✅ تم تحديث رسالة الصيانة.",
+                reply_markup=admin_keyboard(),
+            )
+            return
+
+        if state == "news":
+            set_setting("latest_news", text)
+            context.user_data.clear()
+
+            await update.message.reply_text(
+                "📰 تم حفظ الخبر.",
+                reply_markup=admin_keyboard(),
+            )
+            return
+
+        if state == "broadcast":
+            await do_broadcast(update, context)
+            return
+
+        if state == "admin_manage":
+            if text.startswith("+"):
+                try:
+                    new_admin = int(text[1:].strip())
+
+                    with closing(get_db()) as conn:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO admins(user_id) VALUES (?)",
+                            (new_admin,),
+                        )
+                        conn.commit()
+
+                    await update.message.reply_text(
+                        "✅ تمت إضافة المشرف.",
+                        reply_markup=admin_keyboard(),
+                    )
+                    context.user_data.clear()
+                    return
+
+                except ValueError:
+                    pass
+
+            if text.startswith("-"):
+                try:
+                    remove_admin = int(text[1:].strip())
+
+                    if remove_admin == ADMIN_ID:
+                        await update.message.reply_text(
+                            "❌ لا يمكن حذف المشرف الرئيسي.",
+                            reply_markup=admin_keyboard(),
+                        )
+                        context.user_data.clear()
+                        return
+
+                    with closing(get_db()) as conn:
+                        conn.execute(
+                            "DELETE FROM admins WHERE user_id = ?",
+                            (remove_admin,),
+                        )
+                        conn.commit()
+
+                    await update.message.reply_text(
+                        "🗑 تمت إزالة المشرف.",
+                        reply_markup=admin_keyboard(),
+                    )
+                    context.user_data.clear()
+                    return
+
+                except ValueError:
+                    pass
+
+        if state == "channel_manage":
+            if text.startswith("+"):
+                parts = text[1:].strip().split(maxsplit=1)
+
+                if parts:
+                    chat_id = parts[0]
+                    title = parts[1] if len(parts) > 1 else ""
+
+                    with closing(get_db()) as conn:
+                        conn.execute(
+                            "INSERT INTO channels(chat_id,title) VALUES (?,?)",
+                            (chat_id, title),
+                        )
+                        conn.commit()
+
+                    context.user_data.clear()
+
+                    await update.message.reply_text(
+                        "✅ تمت إضافة القناة/المجموعة.",
+                        reply_markup=admin_keyboard(),
+                    )
+                    return
+
+        # SEARCH
+        if state == "search":
+            await perform_search(update, context, text)
+            return
+
+    # -----------------------------------------------------
+    # SEARCH RESULT
+    # -----------------------------------------------------
+
+    search_results = context.user_data.get("search_results")
+
+    if search_results and text not in (
+        "🏠 القائمة الرئيسية",
+        "🔙 رجوع",
+    ):
+        button_id = parse_button_choice(text)
+
+        if button_id in search_results:
+            row = get_button(button_id)
+
+            if row:
+                context.user_data.pop("search_results", None)
+                await open_dynamic_button(update, context, row)
+                return
+
+    # -----------------------------------------------------
+    # MAIN NAVIGATION
+    # -----------------------------------------------------
+
+    if text == "🏠 القائمة الرئيسية":
+        context.user_data.clear()
 
         await update.message.reply_text(
-            "❌ نوع الملف غير صحيح."
+            get_setting("start_message"),
+            reply_markup=main_keyboard(user_id),
         )
         return
 
-    create_button(
-        title,
+    if text == "🔙 لوحة الأدمن" and is_admin(user_id):
+        await admin_panel(update, context)
+        return
+
+    if text == "🔙 رجوع":
+        parent_id = context.user_data.get("parent_id", 0)
+
+        if parent_id == 0:
+            await update.message.reply_text(
+                get_setting("start_message"),
+                reply_markup=main_keyboard(user_id),
+            )
+            return
+
+        row = get_button(parent_id)
+        previous_id = row[1] if row else 0
+
+        await show_section(update, context, previous_id)
+        return
+
+    if text == "🔄 تحديث":
+        await start(update, context)
+        return
+
+    if text == "📖 تعلم كيفية استخدام البوت":
+        await update.message.reply_text(
+            HELP_TEXT,
+            reply_markup=back_keyboard(),
+        )
+        return
+
+    if text == "📞 تواصل معنا":
+        await update.message.reply_text(
+            CONTACT_TEXT,
+            reply_markup=back_keyboard(),
+        )
+        return
+
+    if text == "📚 المواد الدراسية":
+        await show_section(update, context, 0)
+        return
+
+    if text == "📖 المحاضرات":
+        await show_section(update, context, 0)
+        return
+
+    if text == "📝 الملخصات":
+        await show_section(update, context, 0)
+        return
+
+    if text == "📂 الملفات":
+        await show_section(update, context, 0)
+        return
+
+    if text == "❓ الأسئلة":
+        await show_section(update, context, 0)
+        return
+
+    if text == "🔍 البحث في المواد":
+        await search_start(update, context)
+        return
+
+    # -----------------------------------------------------
+    # ADMIN MENU
+    # -----------------------------------------------------
+
+    if not is_admin(user_id):
+        # Dynamic button
+        parent_id = context.user_data.get("parent_id", 0)
+
+        with closing(get_db()) as conn:
+            row = conn.execute("""
+                SELECT id, parent_id, title, position
+                FROM buttons
+                WHERE parent_id = ? AND title = ?
+                LIMIT 1
+            """, (parent_id, text)).fetchone()
+
+        if row:
+            await open_dynamic_button(update, context, row)
+        return
+
+    if text == "⚙️ لوحة الأدمن":
+        await admin_panel(update, context)
+        return
+
+    if text == "📊 الإحصائيات":
+        with closing(get_db()) as conn:
+            users = conn.execute(
+                "SELECT COUNT(*) FROM users"
+            ).fetchone()[0]
+            buttons = conn.execute(
+                "SELECT COUNT(*) FROM buttons"
+            ).fetchone()[0]
+            posts = conn.execute(
+                "SELECT COUNT(*) FROM posts"
+            ).fetchone()[0]
+
+        await update.message.reply_text(
+            f"📊 إحصائيات البوت\n\n"
+            f"👥 المشتركون: {users}\n"
+            f"🔘 الأزرار: {buttons}\n"
+            f"📝 المشاركات: {posts}\n"
+            f"🤖 الحالة: "
+            f"{'🛠 صيانة' if get_setting('maintenance') == '1' else '🟢 يعمل'}",
+            reply_markup=admin_keyboard(),
+        )
+        return
+
+    if text == "👥 المشتركين":
+        users = get_all_users()
+
+        await update.message.reply_text(
+            f"👥 عدد المشتركين:\n\n{len(users)} مستخدم",
+            reply_markup=admin_keyboard(),
+        )
+        return
+
+    if text == "🔘 محرر الأزرار":
+        await button_editor(update, context)
+        return
+
+    if text == "📝 محرر المشاركات":
+        await post_editor(update, context)
+        return
+
+    if text == "➕ إضافة زر":
+        await add_button_start(update, context)
+        return
+
+    if text == "✏️ تعديل زر":
+        await edit_button_start(update, context)
+        return
+
+    if text == "🗑 حذف زر":
+        await delete_button_start(update, context)
+        return
+
+    if text == "📋 عرض الأزرار":
+        buttons = all_buttons()
+
+        if not buttons:
+            result = "📋 لا توجد أزرار."
+        else:
+            result = "📋 الأزرار:\n\n"
+            for button_id, title, parent_id in buttons:
+                result += f"🔘 {title} 〔{button_id}〕\n"
+
+        await update.message.reply_text(
+            result,
+            reply_markup=button_editor_keyboard(),
+        )
+        return
+
+    if text == "↕️ ترتيب الأزرار":
+        await update.message.reply_text(
+            "↕️ ترتيب الأزرار\n\n"
+            "يمكن تطوير الترتيب بالسحب أو بأوامر نقل للأعلى والأسفل. "
+            "حالياً يتم ترتيب الأزرار حسب ترتيب الإضافة.",
+            reply_markup=button_editor_keyboard(),
+        )
+        return
+
+    if text == "➕ إضافة محتوى":
+        await add_content_start(update, context)
+        return
+
+    if text == "✏️ تعديل محتوى":
+        await edit_content_start(update, context)
+        return
+
+    if text == "🗑 حذف محتوى":
+        await delete_content_start(update, context)
+        return
+
+    if text == "📋 عرض المحتوى":
+        with closing(get_db()) as conn:
+            rows = conn.execute("""
+                SELECT b.id, b.title, p.content_type
+                FROM buttons b
+                LEFT JOIN posts p ON p.button_id = b.id
+                ORDER BY b.position, b.id
+            """).fetchall()
+
+        result = "📋 محتوى الأزرار:\n\n"
+
+        for button_id, title, content_type in rows:
+            result += (
+                f"🔘 {title} 〔{button_id}〕\n"
+                f"📄 {content_type or 'لا يوجد محتوى'}\n\n"
+            )
+
+        await update.message.reply_text(
+            result,
+            reply_markup=post_editor_keyboard(),
+        )
+        return
+
+    if text == "📰 محرر الأخبار":
+        await news_editor(update, context)
+        return
+
+    if text == "📢 إرسال جماعي":
+        await broadcast_start(update, context)
+        return
+
+    if text == "⚙️ إعدادات البوت":
+        await bot_settings(update, context)
+        return
+
+    if text == "🛠 وضع الصيانة":
+        await toggle_maintenance(update, context)
+        return
+
+    if text == "✏️ رسالة البدء":
+        await edit_start_message(update, context)
+        return
+
+    if text == "🔧 رسالة الصيانة":
+        await edit_maintenance_message(update, context)
+        return
+
+    if text == "👮 إعداد المشرفين":
+        await admins(update, context)
+        return
+
+    if text == "📢 قنوات ومجموعات":
+        await channels(update, context)
+        return
+
+    # Dynamic admin navigation
+    parent_id = context.user_data.get("parent_id", 0)
+
+    with closing(get_db()) as conn:
+        row = conn.execute("""
+            SELECT id, parent_id, title, position
+            FROM buttons
+            WHERE parent_id = ? AND title = ?
+            LIMIT 1
+        """, (parent_id, text)).fetchone()
+
+    if row:
+        await open_dynamic_button(update, context, row)
+
+
+# =========================================================
+# MEDIA HANDLER
+# =========================================================
+
+async def handle_media(update, context):
+    user_id = update.effective_user.id
+
+    if not is_admin(user_id):
+        return
+
+    state = context.user_data.get("state")
+
+    if state != "content_media":
+        return
+
+    button_id = context.user_data.get("selected_button")
+    content_type = context.user_data.get("content_type")
+
+    file_id = None
+
+    if content_type == "document" and update.message.document:
+        file_id = update.message.document.file_id
+
+    elif content_type == "photo" and update.message.photo:
+        file_id = update.message.photo[-1].file_id
+
+    elif content_type == "video" and update.message.video:
+        file_id = update.message.video.file_id
+
+    else:
+        await update.message.reply_text(
+            "❌ نوع الملف غير مطابق. أرسل النوع المطلوب."
+        )
+        return
+
+    await save_post(
+        button_id,
         content_type,
-        file_id=file_id
+        file_id=file_id,
     )
 
     context.user_data.clear()
 
     await update.message.reply_text(
-        "✅ تمت إضافة المحتوى بنجاح.",
-        reply_markup=editor_keyboard()
+        "✅ تم حفظ المحتوى وربطه بالزر بنجاح.",
+        reply_markup=post_editor_keyboard(),
     )
-
-
-# =========================================================
-# TEXT HANDLER
-# =========================================================
-
-async def handle_text(update, context):
-
-    text = update.message.text
-    user_id = update.effective_user.id
-
-    if is_admin(user_id):
-
-        state = context.user_data.get("state")
-
-        # -----------------------------------------------
-        # إضافة زر
-        # -----------------------------------------------
-
-        if state == "add_button":
-
-            context.user_data["button_title"] = text
-            context.user_data["state"] = "choose_type"
-
-            await update.message.reply_text(
-                "🔘 الزر: "
-                + text
-                + "\n\nاختر نوع المحتوى:",
-                reply_markup=ReplyKeyboardMarkup(
-                    [
-                        [
-                            KeyboardButton("📝 نص"),
-                            KeyboardButton("📄 PDF")
-                        ],
-                        [
-                            KeyboardButton("🖼 صورة"),
-                            KeyboardButton("🎬 فيديو")
-                        ],
-                        [
-                            KeyboardButton("📁 قائمة")
-                        ],
-                        [
-                            KeyboardButton("🔙 محرر الأزرار")
-                        ]
-                    ],
-                    resize_keyboard=True
-                )
-            )
-
-            return
-
-        # -----------------------------------------------
-        # اختيار نوع المحتوى
-        # -----------------------------------------------
-
-        if state == "choose_type":
-
-            types = {
-                "📝 نص": "text",
-                "📄 PDF": "pdf",
-                "🖼 صورة": "photo",
-                "🎬 فيديو": "video",
-                "📁 قائمة": "menu"
-            }
-
-            if text in types:
-
-                content_type = types[text]
-
-                if content_type == "menu":
-
-                    create_button(
-                        context.user_data["button_title"],
-                        "menu"
-                    )
-
-                    context.user_data.clear()
-
-                    await update.message.reply_text(
-                        "✅ تمت إضافة القائمة بنجاح.",
-                        reply_markup=editor_keyboard()
-                    )
-
-                else:
-
-                    await choose_content_type(
-                        update,
-                        context,
-                        content_type
-                    )
-
-                return
-
-        # -----------------------------------------------
-        # نص المحتوى
-        # -----------------------------------------------
-
-        if state == "content" and \
-                context.user_data.get("content_type") == "text":
-
-            title = context.user_data.get(
-                "button_title",
-                "نص"
-            )
-
-            create_button(
-                title,
-                "text",
-                content=text
-            )
-
-            context.user_data.clear()
-
-            await update.message.reply_text(
-                "✅ تمت إضافة النص بنجاح.",
-                reply_markup=editor_keyboard()
-            )
-
-            return
-
-        # -----------------------------------------------
-        # حذف
-        # -----------------------------------------------
-
-        if state == "delete_button":
-
-            try:
-                button_id = int(text)
-
-            except ValueError:
-
-                await update.message.reply_text(
-                    "❌ أرسل رقم الزر فقط."
-                )
-                return
-
-            if delete_button(button_id):
-
-                await update.message.reply_text(
-                    "🗑 تم حذف الزر بنجاح.",
-                    reply_markup=editor_keyboard()
-                )
-
-            else:
-
-                await update.message.reply_text(
-                    "❌ لم يتم العثور على هذا الزر.",
-                    reply_markup=editor_keyboard()
-                )
-
-            context.user_data.clear()
-            return
-
-        # -----------------------------------------------
-        # رسالة البدء
-        # -----------------------------------------------
-
-        if state == "start_message":
-
-            set_setting(
-                "start_message",
-                text
-            )
-
-            context.user_data.clear()
-
-            await update.message.reply_text(
-                "✅ تم تحديث رسالة البدء.",
-                reply_markup=admin_keyboard()
-            )
-
-            return
-
-        # -----------------------------------------------
-        # رسالة الصيانة
-        # -----------------------------------------------
-
-        if state == "maintenance_message":
-
-            set_setting(
-                "maintenance_message",
-                text
-            )
-
-            context.user_data.clear()
-
-            await update.message.reply_text(
-                "✅ تم تحديث رسالة الصيانة.",
-                reply_markup=admin_keyboard()
-            )
-
-            return
-
-        # -----------------------------------------------
-        # الإرسال الجماعي
-        # -----------------------------------------------
-
-        if state == "broadcast":
-
-            await broadcast(
-                update,
-                context
-            )
-
-            return
-
-        # -----------------------------------------------
-        # الأخبار
-        # -----------------------------------------------
-
-        if state == "news":
-
-            set_setting(
-                "latest_news",
-                text
-            )
-
-            context.user_data.clear()
-
-            await update.message.reply_text(
-                "📰 تم حفظ الخبر بنجاح.",
-                reply_markup=admin_keyboard()
-            )
-
-            return
-
-        # -----------------------------------------------
-        # المحرر النصي
-        # -----------------------------------------------
-
-        if state == "editor_text":
-
-            set_setting(
-                "editor_text",
-                text
-            )
-
-            context.user_data.clear()
-
-            await update.message.reply_text(
-                "✏️ تم حفظ النص بنجاح.",
-                reply_markup=admin_keyboard()
-            )
-
-            return
-
-    # =====================================================
-    # GENERAL MENU
-    # =====================================================
-
-    if text == "⚙️ لوحة الأدمن":
-
-        await admin_panel(
-            update,
-            context
-        )
-        return
-
-    if text == "🏠 القائمة الرئيسية":
-
-        context.user_data.clear()
-
-        await update.message.reply_text(
-            get_setting("start_message"),
-            reply_markup=main_keyboard(user_id)
-        )
-        return
-
-    if text == "📚 المواد الدراسية":
-
-        await show_dynamic_buttons(
-            update,
-            context
-        )
-        return
-
-    if text == "📖 المحاضرات":
-
-        await show_dynamic_buttons(
-            update,
-            context
-        )
-        return
-
-    if text == "📝 الملخصات":
-
-        await show_dynamic_buttons(
-            update,
-            context
-        )
-        return
-
-    if text == "📂 الملفات":
-
-        await show_dynamic_buttons(
-            update,
-            context
-        )
-        return
-
-    if text == "❓ الأسئلة":
-
-        await show_dynamic_buttons(
-            update,
-            context
-        )
-        return
-
-    if text == "🔍 البحث":
-
-        await update.message.reply_text(
-            "🔍 أرسل كلمة البحث."
-        )
-        return
-
-    # =====================================================
-    # ADMIN
-    # =====================================================
-
-    if not is_admin(user_id):
-        return
-
-    if text == "📊 الإحصائيات":
-
-        await statistics(
-            update,
-            context
-        )
-        return
-
-    if text == "👥 المشتركين":
-
-        await subscribers(
-            update,
-            context
-        )
-        return
-
-    if text == "📰 محرر الأخبار":
-
-        await news_editor(
-            update,
-            context
-        )
-        return
-
-    if text == "✏️ المحرر النصي":
-
-        await text_editor(
-            update,
-            context
-        )
-        return
-
-    if text == "🔘 محرر الأزرار":
-
-        await button_editor(
-            update,
-            context
-        )
-        return
-
-    if text == "➕ إضافة زر":
-
-        await add_button(
-            update,
-            context
-        )
-        return
-
-    if text == "📝 إضافة نص":
-
-        context.user_data["button_title"] = "نص جديد"
-
-        await choose_content_type(
-            update,
-            context,
-            "text"
-        )
-        return
-
-    if text == "📄 إضافة PDF":
-
-        context.user_data["button_title"] = "ملف PDF"
-
-        await choose_content_type(
-            update,
-            context,
-            "pdf"
-        )
-        return
-
-    if text == "🖼 إضافة صورة":
-
-        context.user_data["button_title"] = "صورة جديدة"
-
-        await choose_content_type(
-            update,
-            context,
-            "photo"
-        )
-        return
-
-    if text == "🎬 إضافة فيديو":
-
-        context.user_data["button_title"] = "فيديو جديد"
-
-        await choose_content_type(
-            update,
-            context,
-            "video"
-        )
-        return
-
-    if text == "📋 عرض الأزرار":
-
-        await list_buttons(
-            update,
-            context
-        )
-        return
-
-    if text == "🗑 حذف زر":
-
-        await delete_button_start(
-            update,
-            context
-        )
-        return
-
-    if text == "🔙 محرر الأزرار":
-
-        await button_editor(
-            update,
-            context
-        )
-        return
-
-    if text == "📢 إرسال جماعي":
-
-        await broadcast_start(
-            update,
-            context
-        )
-        return
-
-    if text == "📣 الإعلانات":
-
-        await news_editor(
-            update,
-            context
-        )
-        return
-
-    if text == "⚙️ إعدادات البوت":
-
-        await update.message.reply_text(
-            "⚙️ إعدادات البوت\n\n"
-            "✏️ رسالة البدء\n"
-            "🔧 رسالة الصيانة",
-            reply_markup=admin_keyboard()
-        )
-        return
-
-    if text == "🛠 وضع الصيانة":
-
-        await maintenance(
-            update,
-            context
-        )
-        return
-
-    if text == "✏️ رسالة البدء":
-
-        await edit_start_message(
-            update,
-            context
-        )
-        return
-
-    if text == "🔧 رسالة الصيانة":
-
-        await edit_maintenance_message(
-            update,
-            context
-        )
-        return
-
-    if text == "👮 إعداد المشرفين":
-
-        await admins(
-            update,
-            context
-        )
-        return
-
-    if text == "📢 قنوات ومجموعات":
-
-        await channels(
-            update,
-            context
-        )
-        return
-
-    if text == "🔄 تحديث":
-
-        await start(
-            update,
-            context
-        )
-        return
 
 
 # =========================================================
@@ -1519,61 +1735,30 @@ async def handle_text(update, context):
 # =========================================================
 
 def main():
-
     if not TOKEN:
         raise RuntimeError(
-            "BOT_TOKEN غير موجود في Environment Variables"
+            "BOT_TOKEN غير موجود. أضفه في Environment Variables."
         )
 
-    app = (
-        ApplicationBuilder()
-        .token(TOKEN)
-        .build()
-    )
+    app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(
-        CommandHandler(
-            "start",
-            start
-        )
-    )
-
-    app.add_handler(
-        CallbackQueryHandler(
-            content_callback
-        )
-    )
+    app.add_handler(CommandHandler("start", start))
 
     app.add_handler(
         MessageHandler(
-            filters.Document.ALL,
-            handle_media
-        )
-    )
-
-    app.add_handler(
-        MessageHandler(
-            filters.PHOTO,
-            handle_media
-        )
-    )
-
-    app.add_handler(
-        MessageHandler(
-            filters.VIDEO,
-            handle_media
+            filters.Document.ALL | filters.PHOTO | filters.VIDEO,
+            handle_media,
         )
     )
 
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
-            handle_text
+            handle_text,
         )
     )
 
     print("🤖 البوت يعمل الآن...")
-
     app.run_polling()
 
 

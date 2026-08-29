@@ -2731,28 +2731,27 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
-    if data.startswith("DELETE_YES:"):
-        if is_admin(user.id):
-            section_id = int(data.split(":")[1])
-            delete_section(section_id)
+elif data.startswith("DELETE_YES:"):
+    if is_admin(user.id):
+        section_id = int(data.split(":")[1])
+        delete_section(section_id)
 
-            await query.edit_message_text(
-                "<b>✅ تم حذف القسم ومحتوياته.</b>",
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton(
-                            "🧩 محرر الأزرار",
-                            callback_data="ADMIN:BUTTONS"
-                        ],
-                        InlineKeyboardButton(
-                            "🏠 الرئيسية",
-                            callback_data="MAIN"
-                        )
-                    ]
-                ])
-            )
-        return
+        await query.edit_message_text(
+            "<b>✅ تم حذف القسم ومحتوياته بنجاح.</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "🧩 محرر الأزرار",
+                        callback_data="ADMIN:BUTTONS"
+                    ),
+                    InlineKeyboardButton(
+                        "🏠 الرئيسية",
+                        callback_data="MAIN"
+                    )
+                ]
+            ])
+        )
 
     # --------------------------------------------------------
     # MOVE

@@ -44,11 +44,14 @@ from telegram.ext import (
 # CONFIG
 # ============================================================
 
+os.environ.setdefault("PYTHONUTF8", "1")
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
-# ÙØ¹Ø±Ù Ø§ÙØ£Ø¯ÙÙ Ø§ÙØ£Ø³Ø§Ø³Ù
-# ÙÙÙÙ ØªØºÙÙØ±Ù ÙÙ Render Ø¹Ø¨Ø± ADMIN_IDØ ÙØ¥Ø°Ø§ ÙÙ ÙÙÙ ÙÙØ¬ÙØ¯Ø§Ù
-# Ø³ÙØ³ØªØ®Ø¯Ù ÙØ°Ø§ Ø§ÙÙØ¹Ø±Ù ØªÙÙØ§Ø¦ÙØ§Ù.
+# معرف الأدمن الأساسي
+# يمكن تغييره من Render عبر ADMIN_ID، وإذا لم يكن موجوداً
+# سيستخدم هذا المعرف تلقائياً.
 ADMIN_ID = 5734654153
 try:
     ADMIN_ID = int(os.getenv("ADMIN_ID", str(ADMIN_ID)) or ADMIN_ID)
@@ -76,6 +79,52 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger("universal-menu-bot")
+
+
+def repair_mojibake(value):
+    """Repair common UTF-8 -> Latin-1/Windows-1252 mojibake safely.
+
+    Existing database rows from an older broken build may contain text such as
+    ``Ø§Ù...`` or emoji rendered as ``ð...``. New text is left untouched.
+    """
+    if not isinstance(value, str) or not value:
+        return value
+
+    markers = ("Ø", "Ù", "Ð", "Ã", "Â", "â", "ð", "ï", "�")
+    if not any(ch in value for ch in markers):
+        return value
+
+    try:
+        repaired = value.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return value
+
+    # Only keep the conversion when it actually removes mojibake markers.
+    old_score = sum(value.count(ch) for ch in markers)
+    new_score = sum(repaired.count(ch) for ch in markers)
+    return repaired if new_score < old_score else value
+
+
+def repair_database_text():
+    """Fix legacy mojibake stored in settings/buttons/content titles."""
+    conn = db()
+    cur = conn.cursor()
+    for table, column in (("settings", "value"), ("buttons", "title"),
+                          ("contents", "title")):
+        try:
+            rows = cur.execute(f"SELECT rowid, {column} FROM {table}").fetchall()
+            for row in rows:
+                fixed = repair_mojibake(row[1])
+                if fixed != row[1]:
+                    cur.execute(
+                        f"UPDATE {table} SET {column}=? WHERE rowid=?",
+                        (fixed, row[0]),
+                    )
+        except sqlite3.Error:
+            logger.exception("Unicode repair failed for %s.%s", table, column)
+    conn.commit()
+    conn.close()
+
 
 app = Flask(__name__)
 telegram_app = None
@@ -188,15 +237,15 @@ def init_db():
     """)
 
     defaults = {
-        "bot_name": "ð¤ Ø§ÙÙØ³Ø§Ø¹Ø¯ Ø§ÙØ°ÙÙ",
-        "home_title": "ð  Ø§ÙØ±Ø¦ÙØ³ÙØ©",
-        "home_text": "ð Ø£ÙÙØ§Ù Ø¨Ù!\n\nâ¨ Ø§Ø®ØªØ± ÙÙ Ø§ÙÙØ§Ø¦ÙØ© Ø£Ø¯ÙØ§Ù:",
-        "about_text": "â¹ï¸ <b>Ø­ÙÙ Ø§ÙØ¨ÙØª</b>\n\nØ¨ÙØª Ø¹Ø§Ù ÙØ§Ø¨Ù ÙÙØªØ®ØµÙØµ Ø¨Ø§ÙÙØ§ÙÙ ÙÙ ÙÙØ­Ø© Ø§ÙØ¥Ø¯Ø§Ø±Ø©.",
+        "bot_name": "🤖 المساعد الذكي",
+        "home_title": "🏠 الرئيسية",
+        "home_text": "👋 أهلاً بك!\n\n✨ اختر من القائمة أدناه:",
+        "about_text": "ℹ️ <b>حول البوت</b>\n\nبوت عام قابل للتخصيص بالكامل من لوحة الإدارة.",
         "maintenance": "0",
-        "maintenance_text": "ð  Ø§ÙØ¨ÙØª Ø­Ø§ÙÙØ§Ù ØªØ­Øª Ø§ÙØµÙØ§ÙØ©.\n\nâ³ Ø­Ø§ÙÙ ÙØ§Ø­ÙØ§Ù.",
-        "subscription_text": "ð ÙÙÙØµÙÙ Ø¥ÙÙ Ø§ÙØ¨ÙØªØ ÙØ±Ø¬Ù Ø§ÙØ§Ø´ØªØ±Ø§Ù Ø¨Ø§ÙÙÙØ§Ø© Ø£ÙÙØ§Ù Ø«Ù Ø§ÙØ¶ØºØ· Ø¹ÙÙ Ø²Ø± Ø§ÙØªØ­ÙÙ.",
-        "notifications_text": "ð ÙÙ ØªØ±ÙØ¯ Ø§Ø³ØªÙØ¨Ø§Ù Ø¥Ø´Ø¹Ø§Ø±Ø§Øª Ø¹ÙØ¯ Ø¥Ø¶Ø§ÙØ© ÙØ­ØªÙÙ Ø¬Ø¯ÙØ¯Ø",
-        "announcement_text": "ð¢ Ø¥Ø¹ÙØ§Ù Ø¬Ø¯ÙØ¯",
+        "maintenance_text": "🛠 البوت حالياً تحت الصيانة.\n\n⏳ حاول لاحقاً.",
+        "subscription_text": "🔐 للوصول إلى البوت، يرجى الاشتراك بالقناة أولاً ثم الضغط على زر التحقق.",
+        "notifications_text": "🔔 هل تريد استقبال إشعارات عند إضافة محتوى جديد؟",
+        "announcement_text": "📢 إعلان جديد",
     }
 
     for key, value in defaults.items():
@@ -212,13 +261,13 @@ def init_db():
 
     if root_count == 0:
         roots = [
-            ("ð Ø§ÙØ£ÙØ³Ø§Ù", "menu"),
-            ("â­ Ø§ÙÙÙØ¶ÙØ©", "favorites"),
-            ("ð Ø§ÙØ¨Ø­Ø«", "search"),
-            ("ð Ø§ÙØ¥Ø´Ø¹Ø§Ø±Ø§Øª", "notifications"),
-            ("â­ ØªÙÙÙÙ Ø§ÙØ¨ÙØª", "rating"),
-            ("ð¬ ÙØ±Ø§Ø³ÙØ© Ø§ÙØ¥Ø¯Ø§Ø±Ø©", "contact"),
-            ("â¹ï¸ Ø­ÙÙ Ø§ÙØ¨ÙØª", "about"),
+            ("📚 الأقسام", "menu"),
+            ("⭐ المفضلة", "favorites"),
+            ("🔎 البحث", "search"),
+            ("🔔 الإشعارات", "notifications"),
+            ("⭐ تقييم البوت", "rating"),
+            ("💬 مراسلة الإدارة", "contact"),
+            ("ℹ️ حول البوت", "about"),
         ]
         for pos, (title, action) in enumerate(roots):
             cur.execute("""
@@ -555,15 +604,15 @@ def detect_content_type(message):
 def default_title(message, ctype):
     if message.text:
         text = message.text.strip().replace("\n", " ")
-        return text[:80] or "ÙØ­ØªÙÙ ÙØµÙ"
+        return text[:80] or "محتوى نصي"
     return {
-        "document": "ð ÙÙÙ",
-        "photo": "ð¼ ØµÙØ±Ø©",
-        "video": "ð¥ ÙÙØ¯ÙÙ",
-        "audio": "ðµ ØµÙØª",
-        "voice": "ð Ø±Ø³Ø§ÙØ© ØµÙØªÙØ©",
-        "animation": "ð GIF",
-    }.get(ctype, "ð¦ ÙØ­ØªÙÙ")
+        "document": "📄 ملف",
+        "photo": "🖼 صورة",
+        "video": "🎥 فيديو",
+        "audio": "🎵 صوت",
+        "voice": "🎙 رسالة صوتية",
+        "animation": "🎞 GIF",
+    }.get(ctype, "📦 محتوى")
 
 
 # ============================================================
@@ -580,8 +629,8 @@ async def subscription_required(user_id):
         return member.status in ("creator", "administrator", "member")
     except Exception as exc:
         logger.warning("Subscription check failed: %s", exc)
-        # Fail closed for configured mandatory channel.
-        return True
+        # Do not turn a temporary Telegram API error into a permanent lockout.
+        return False
 
 
 async def send_subscription_gate(update):
@@ -589,12 +638,12 @@ async def send_subscription_gate(update):
     if REQUIRED_CHANNEL_URL:
         buttons.append([
             InlineKeyboardButton(
-                "ð¢ Ø§ÙØ§Ø´ØªØ±Ø§Ù Ø¨Ø§ÙÙÙØ§Ø©",
+                "📢 الاشتراك بالقناة",
                 url=REQUIRED_CHANNEL_URL
             )
         ])
     buttons.append([
-        InlineKeyboardButton("â ØªØ­ÙÙ ÙÙ Ø§ÙØ§Ø´ØªØ±Ø§Ù", callback_data="SUB:CHECK")
+        InlineKeyboardButton("✅ تحقق من الاشتراك", callback_data="SUB:CHECK")
     ])
     await update.effective_message.reply_text(
         get_setting("subscription_text"),
@@ -620,36 +669,36 @@ def home_keyboard():
 
 def admin_keyboard():
     return reply_kb([
-        ["âï¸ Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª Ø§ÙØ¨ÙØª", "ð ÙØ­Ø±Ø± Ø§ÙØ£Ø²Ø±Ø§Ø±"],
-        ["ð ÙØ­Ø±Ø± Ø§ÙÙØ­ØªÙÙ", "ð¢ Ø§ÙØ¥Ø¹ÙØ§Ù"],
-        ["ð£ Ø±Ø³Ø§ÙØ© Ø¬ÙØ§Ø¹ÙØ©", "ð Ø§ÙØ¥Ø´Ø¹Ø§Ø±Ø§Øª"],
-        ["ð¬ Ø§ÙÙØ±Ø§Ø³ÙØ§Øª", "â­ Ø§ÙØªÙÙÙÙØ§Øª"],
-        ["ð¥ Ø§ÙÙØ³ØªØ®Ø¯ÙÙÙ", "ð Ø§ÙØ¥Ø­ØµØ§Ø¦ÙØ§Øª"],
-        ["ð  Ø§ÙØµÙØ§ÙØ©", "ð Ø§ÙÙØ¹Ø§ÙÙØ©"],
-        ["ð  ÙØ§Ø¬ÙØ© Ø§ÙÙØ³ØªØ®Ø¯Ù"],
+        ["⚙️ إعدادات البوت", "🎛 محرر الأزرار"],
+        ["📝 محرر المحتوى", "📢 الإعلان"],
+        ["📣 رسالة جماعية", "🔔 الإشعارات"],
+        ["💬 المراسلات", "⭐ التقييمات"],
+        ["👥 المستخدمون", "📊 الإحصائيات"],
+        ["🛠 الصيانة", "👁 المعاينة"],
+        ["🏠 واجهة المستخدم"],
     ])
 
 
 def cancel_keyboard():
-    return reply_kb([["â Ø¥ÙØºØ§Ø¡"]])
+    return reply_kb([["❌ إلغاء"]])
 
 
 def admin_button_selector(prefix="BTN"):
     rows = []
     for b in all_buttons():
         rows.append([
-            KeyboardButton(f"{b['title']} ã{b['id']}ã")
+            KeyboardButton(f"{b['title']} 〔{b['id']}〕")
         ])
-    rows.append([KeyboardButton("ð  Ø§ÙØ±Ø¦ÙØ³ÙØ©")])
-    rows.append([KeyboardButton("â Ø¥ÙØºØ§Ø¡")])
+    rows.append([KeyboardButton("🏠 الرئيسية")])
+    rows.append([KeyboardButton("❌ إلغاء")])
     return reply_kb(rows)
 
 
 def parse_id_from_button_text(text):
-    if "ã" not in text or "ã" not in text:
+    if "〔" not in text or "〕" not in text:
         return None
     try:
-        return int(text.rsplit("ã", 1)[1].split("ã", 1)[0])
+        return int(text.rsplit("〔", 1)[1].split("〕", 1)[0])
     except (ValueError, IndexError):
         return None
 
@@ -669,7 +718,7 @@ async def show_home(update):
 async def show_button(update, button_id):
     button = get_button(button_id)
     if not button or not button["enabled"]:
-        await update.effective_message.reply_text("â ÙØ°Ø§ Ø§ÙØ²Ø± ØºÙØ± ÙØªØ§Ø­.")
+        await update.effective_message.reply_text("❌ هذا الزر غير متاح.")
         return
 
     user_id = update.effective_user.id
@@ -692,7 +741,7 @@ async def show_button(update, button_id):
         context = update._context
         context.user_data["state"] = "USER_SEARCH"
         await update.effective_message.reply_text(
-            "ð Ø£Ø±Ø³Ù ÙÙÙØ© Ø§ÙØ¨Ø­Ø«:",
+            "🔎 أرسل كلمة البحث:",
             reply_markup=cancel_keyboard(),
         )
         return
@@ -712,7 +761,7 @@ async def show_button(update, button_id):
     if action == "contact":
         update._context.user_data["state"] = "USER_CONTACT"
         await update.effective_message.reply_text(
-            "ð¬ Ø£Ø±Ø³Ù Ø±Ø³Ø§ÙØªÙ ÙÙØ¥Ø¯Ø§Ø±Ø©:",
+            "💬 أرسل رسالتك للإدارة:",
             reply_markup=cancel_keyboard(),
         )
         return
@@ -727,7 +776,7 @@ async def show_button(update, button_id):
 
     if action == "url" and button["action_value"]:
         await update.effective_message.reply_text(
-            f"ð {html.escape(button['action_value'])}",
+            f"🔗 {html.escape(button['action_value'])}",
             parse_mode=ParseMode.HTML,
             reply_markup=home_keyboard(),
         )
@@ -754,17 +803,17 @@ async def show_button(update, button_id):
 
     for c in contents:
         rows.append([
-            KeyboardButton(f"ð {c['title'][:60]} ãC{c['id']}ã")
+            KeyboardButton(f"📄 {c['title'][:60]} 〔C{c['id']}〕")
         ])
 
     fav = is_favorite(user_id, button_id)
     rows.append([
-        KeyboardButton("ð Ø¥Ø²Ø§ÙØ© ÙÙ Ø§ÙÙÙØ¶ÙØ©" if fav else "â­ Ø¥Ø¶Ø§ÙØ© ÙÙÙÙØ¶ÙØ©")
+        KeyboardButton("💔 إزالة من المفضلة" if fav else "⭐ إضافة للمفضلة")
     ])
-    rows.append([KeyboardButton("â¬ï¸ Ø±Ø¬ÙØ¹"), KeyboardButton("ð  Ø§ÙØ±Ø¦ÙØ³ÙØ©")])
+    rows.append([KeyboardButton("⬅️ رجوع"), KeyboardButton("🏠 الرئيسية")])
 
     await update.effective_message.reply_text(
-        f"ð <b>{html.escape(button['title'])}</b>\n\nØ§Ø®ØªØ±:",
+        f"📚 <b>{html.escape(button['title'])}</b>\n\nاختر:",
         parse_mode=ParseMode.HTML,
         reply_markup=reply_kb(rows),
     )
@@ -773,11 +822,11 @@ async def show_button(update, button_id):
 async def section_actions(update, button_id):
     fav = is_favorite(update.effective_user.id, button_id)
     await update.effective_message.reply_text(
-        "â¨ ÙØ§Ø°Ø§ ØªØ±ÙØ¯ Ø£Ù ØªÙØ¹ÙØ",
+        "✨ ماذا تريد أن تفعل؟",
         reply_markup=reply_kb([
-            ["ð Ø¥Ø²Ø§ÙØ© ÙÙ Ø§ÙÙÙØ¶ÙØ©" if fav else "â­ Ø¥Ø¶Ø§ÙØ© ÙÙÙÙØ¶ÙØ©"],
-            ["â­ ØªÙÙÙÙ Ø§ÙÙØ­ØªÙÙ"],
-            ["â¬ï¸ Ø±Ø¬ÙØ¹", "ð  Ø§ÙØ±Ø¦ÙØ³ÙØ©"],
+            ["💔 إزالة من المفضلة" if fav else "⭐ إضافة للمفضلة"],
+            ["⭐ تقييم المحتوى"],
+            ["⬅️ رجوع", "🏠 الرئيسية"],
         ]),
     )
 
@@ -794,17 +843,17 @@ async def show_favorites(update):
 
     if not rows:
         await update.effective_message.reply_text(
-            "â­ ÙØ§ ØªÙØ¬Ø¯ Ø¹ÙØ§ØµØ± ÙÙ Ø§ÙÙÙØ¶ÙØ© Ø¨Ø¹Ø¯.",
+            "⭐ لا توجد عناصر في المفضلة بعد.",
             reply_markup=home_keyboard(),
         )
         return
 
     await update.effective_message.reply_text(
-        "â­ <b>Ø§ÙÙÙØ¶ÙØ©</b>",
+        "⭐ <b>المفضلة</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=reply_kb(
             [[KeyboardButton(r["title"])] for r in rows] +
-            [["ð  Ø§ÙØ±Ø¦ÙØ³ÙØ©"]]
+            [["🏠 الرئيسية"]]
         ),
     )
 
@@ -821,8 +870,8 @@ async def show_notification_settings(update):
     await update.effective_message.reply_text(
         get_setting("notifications_text"),
         reply_markup=reply_kb([
-            ["ð Ø¥ÙÙØ§Ù Ø§ÙØ¥Ø´Ø¹Ø§Ø±Ø§Øª" if enabled else "ð ØªÙØ¹ÙÙ Ø§ÙØ¥Ø´Ø¹Ø§Ø±Ø§Øª"],
-            ["ð  Ø§ÙØ±Ø¦ÙØ³ÙØ©"],
+            ["🔕 إيقاف الإشعارات" if enabled else "🔔 تفعيل الإشعارات"],
+            ["🏠 الرئيسية"],
         ]),
     )
 
@@ -830,12 +879,12 @@ async def show_notification_settings(update):
 async def start_rating(update):
     update._context.user_data["state"] = "USER_RATING"
     await update.effective_message.reply_text(
-        "â­ Ø§Ø®ØªØ± ØªÙÙÙÙÙ ÙÙ 1 Ø¥ÙÙ 5:",
+        "⭐ اختر تقييمك من 1 إلى 5:",
         reply_markup=reply_kb([
-            ["â­ 1", "â­â­ 2"],
-            ["â­â­â­ 3"],
-            ["â­â­â­â­ 4", "â­â­â­â­â­ 5"],
-            ["â Ø¥ÙØºØ§Ø¡"],
+            ["⭐ 1", "⭐⭐ 2"],
+            ["⭐⭐⭐ 3"],
+            ["⭐⭐⭐⭐ 4", "⭐⭐⭐⭐⭐ 5"],
+            ["❌ إلغاء"],
         ]),
     )
 
@@ -848,7 +897,7 @@ def admin_only(func):
     @wraps(func)
     async def wrapper(update, context, *args, **kwargs):
         if update.effective_user.id != ADMIN_ID:
-            await update.effective_message.reply_text("â ØºÙØ± ÙØ³ÙÙØ­.")
+            await update.effective_message.reply_text("⛔ غير مسموح.")
             return
         return await func(update, context, *args, **kwargs)
     return wrapper
@@ -856,8 +905,8 @@ def admin_only(func):
 
 async def show_admin(update):
     await update.effective_message.reply_text(
-        "ð <b>ÙÙØ­Ø© Ø§ÙØ¥Ø¯Ø§Ø±Ø©</b>\n\n"
-        "ð ÙÙ ÙÙØ§ ØªØªØ­ÙÙ Ø¨ÙÙ ÙØ§Ø¬ÙØ© Ø§ÙØ¨ÙØª ÙÙØ­ØªÙØ§Ù ÙØ¥Ø¹Ø¯Ø§Ø¯Ø§ØªÙ.",
+        "👑 <b>لوحة الإدارة</b>\n\n"
+        "🎛 من هنا تتحكم بكل واجهة البوت ومحتواه وإعداداته.",
         parse_mode=ParseMode.HTML,
         reply_markup=admin_keyboard(),
     )
@@ -866,15 +915,15 @@ async def show_admin(update):
 async def admin_settings(update, context):
     context.user_data["state"] = "ADMIN_SETTINGS"
     await update.effective_message.reply_text(
-        "âï¸ <b>Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª Ø§ÙØ¨ÙØª</b>\n\n"
-        "Ø§Ø®ØªØ± ÙØ§ ØªØ±ÙØ¯ ØªØºÙÙØ±Ù:",
+        "⚙️ <b>إعدادات البوت</b>\n\n"
+        "اختر ما تريد تغييره:",
         parse_mode=ParseMode.HTML,
         reply_markup=reply_kb([
-            ["âï¸ Ø§Ø³Ù Ø§ÙØ¨ÙØª", "ð  Ø§Ø³Ù Ø§ÙØ±Ø¦ÙØ³ÙØ©"],
-            ["ð ÙØµ Ø§ÙØ±Ø¦ÙØ³ÙØ©", "â¹ï¸ ÙØµ Ø­ÙÙ Ø§ÙØ¨ÙØª"],
-            ["ð ÙØµ Ø§ÙØ§Ø´ØªØ±Ø§Ù", "ð  ÙØµ Ø§ÙØµÙØ§ÙØ©"],
-            ["ð ÙØµ Ø§ÙØ¥Ø´Ø¹Ø§Ø±Ø§Øª", "ð¢ ÙØµ Ø§ÙØ¥Ø¹ÙØ§Ù"],
-            ["â¬ï¸ Ø±Ø¬ÙØ¹"],
+            ["✏️ اسم البوت", "🏠 اسم الرئيسية"],
+            ["📝 نص الرئيسية", "ℹ️ نص حول البوت"],
+            ["🔐 نص الاشتراك", "🛠 نص الصيانة"],
+            ["🔔 نص الإشعارات", "📢 نص الإعلان"],
+            ["⬅️ رجوع"],
         ]),
     )
 
@@ -882,14 +931,14 @@ async def admin_settings(update, context):
 async def admin_buttons(update, context):
     context.user_data["state"] = "ADMIN_BUTTONS"
     await update.effective_message.reply_text(
-        "ð <b>ÙØ­Ø±Ø± Ø§ÙØ£Ø²Ø±Ø§Ø±</b>\n\n"
-        "Ø§ÙØ¥Ø¶Ø§ÙØ© ÙØ§ÙØªØ¹Ø¯ÙÙ ÙØ§ÙØ­Ø°Ù ÙØ§ÙÙÙÙ ÙÙÙØ§ ÙÙ ÙÙØ§.",
+        "🎛 <b>محرر الأزرار</b>\n\n"
+        "الإضافة والتعديل والحذف والنقل كلها من هنا.",
         parse_mode=ParseMode.HTML,
         reply_markup=reply_kb([
-            ["â Ø¥Ø¶Ø§ÙØ© Ø²Ø±", "âï¸ ØªØ¹Ø¯ÙÙ Ø²Ø±"],
-            ["ð Ø­Ø°Ù Ø²Ø±", "ð ÙÙÙ Ø²Ø±"],
-            ["ð Ø¹Ø±Ø¶ Ø§ÙØ£Ø²Ø±Ø§Ø±"],
-            ["â¬ï¸ Ø±Ø¬ÙØ¹"],
+            ["➕ إضافة زر", "✏️ تعديل زر"],
+            ["🗑 حذف زر", "🔄 نقل زر"],
+            ["📋 عرض الأزرار"],
+            ["⬅️ رجوع"],
         ]),
     )
 
@@ -897,21 +946,21 @@ async def admin_buttons(update, context):
 async def admin_content(update, context):
     context.user_data["state"] = "ADMIN_CONTENT"
     await update.effective_message.reply_text(
-        "ð <b>ÙØ­Ø±Ø± Ø§ÙÙØ­ØªÙÙ</b>\n\n"
-        "Ø£Ø¶Ù Ø£Ù Ø±Ø³Ø§ÙØ©/ØµÙØ±Ø©/ÙÙØ¯ÙÙ/ÙÙÙ Ø¯Ø§Ø®Ù Ø£Ù Ø²Ø±.",
+        "📝 <b>محرر المحتوى</b>\n\n"
+        "أضف أي رسالة/صورة/فيديو/ملف داخل أي زر.",
         parse_mode=ParseMode.HTML,
         reply_markup=reply_kb([
-            ["â Ø¥Ø¶Ø§ÙØ© ÙØ­ØªÙÙ", "âï¸ ØªØ¹Ø¯ÙÙ ÙØ­ØªÙÙ"],
-            ["ð Ø­Ø°Ù ÙØ­ØªÙÙ", "ð Ø¹Ø±Ø¶ Ø§ÙÙØ­ØªÙÙ"],
-            ["â¬ï¸ Ø±Ø¬ÙØ¹"],
+            ["➕ إضافة محتوى", "✏️ تعديل محتوى"],
+            ["🗑 حذف محتوى", "👁 عرض المحتوى"],
+            ["⬅️ رجوع"],
         ]),
     )
 
 
 async def admin_preview(update, context):
     await update.effective_message.reply_text(
-        "ð <b>ÙØ¸Ø§Ù Ø§ÙÙØ¹Ø§ÙÙØ©</b>\n\n"
-        "Ø§ÙÙØ¹Ø§ÙÙØ© ØªØ¸ÙØ± ÙÙÙØ³ØªØ®Ø¯Ù Ø¨ÙÙØ³ Ø£Ø³ÙÙØ¨ Ø§ÙØ¹Ø±Ø¶ ÙØ¨Ù Ø§Ø¹ØªÙØ§Ø¯ Ø§ÙÙØ´Ø±.",
+        "👁 <b>نظام المعاينة</b>\n\n"
+        "المعاينة تظهر للمستخدم بنفس أسلوب العرض قبل اعتماد النشر.",
         parse_mode=ParseMode.HTML,
         reply_markup=admin_keyboard(),
     )
@@ -930,13 +979,13 @@ async def admin_stats(update, context):
     conn.close()
 
     await update.effective_message.reply_text(
-        "ð <b>Ø§ÙØ¥Ø­ØµØ§Ø¦ÙØ§Øª</b>\n\n"
-        f"ð¥ Ø§ÙÙØ³ØªØ®Ø¯ÙÙÙ: <b>{values['users']}</b>\n"
-        f"ð Ø§ÙØ£Ø²Ø±Ø§Ø±: <b>{values['buttons']}</b>\n"
-        f"ð Ø§ÙÙØ­ØªÙÙ: <b>{values['contents']}</b>\n"
-        f"â­ Ø§ÙÙÙØ¶ÙØ©: <b>{values['favorites']}</b>\n"
-        f"ð Ø§ÙØªÙÙÙÙØ§Øª: <b>{values['ratings']}</b>\n"
-        f"ð¬ Ø§ÙÙØ±Ø§Ø³ÙØ§Øª: <b>{values['messages']}</b>",
+        "📊 <b>الإحصائيات</b>\n\n"
+        f"👥 المستخدمون: <b>{values['users']}</b>\n"
+        f"🔘 الأزرار: <b>{values['buttons']}</b>\n"
+        f"📝 المحتوى: <b>{values['contents']}</b>\n"
+        f"⭐ المفضلة: <b>{values['favorites']}</b>\n"
+        f"🌟 التقييمات: <b>{values['ratings']}</b>\n"
+        f"💬 المراسلات: <b>{values['messages']}</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=admin_keyboard(),
     )
@@ -949,9 +998,9 @@ async def admin_stats(update, context):
 async def admin_broadcast_start(update, context):
     context.user_data["state"] = "ADMIN_BROADCAST"
     await update.effective_message.reply_text(
-        "ð£ Ø£Ø±Ø³Ù Ø§ÙØ±Ø³Ø§ÙØ© Ø§ÙØ¢Ù.\n\n"
-        "ØªÙØ¯Ø± ØªØ±Ø³Ù ÙØµ Ø£Ù ØµÙØ±Ø© Ø£Ù ÙÙØ¯ÙÙ Ø£Ù ÙÙÙ.\n"
-        "ÙØ¨Ù Ø§ÙØªÙÙÙØ° Ø³ÙØ¸ÙØ± ÙÙ ØªØ£ÙÙØ¯.",
+        "📣 أرسل الرسالة الآن.\n\n"
+        "تقدر ترسل نص أو صورة أو فيديو أو ملف.\n"
+        "قبل التنفيذ سيظهر لك تأكيد.",
         reply_markup=cancel_keyboard(),
     )
 
@@ -962,10 +1011,10 @@ async def broadcast_preview(update, context):
     context.user_data["state"] = "ADMIN_BROADCAST_CONFIRM"
 
     await update.effective_message.reply_text(
-        "ð ØªÙØª Ø§ÙÙØ¹Ø§ÙÙØ©.\n\n"
-        "â ï¸ ÙÙ ØªØ±ÙØ¯ Ø¥Ø±Ø³Ø§Ù ÙØ°Ù Ø§ÙØ±Ø³Ø§ÙØ© Ø¥ÙÙ Ø§ÙÙØ³ØªØ®Ø¯ÙÙÙØ",
+        "👁 تمت المعاينة.\n\n"
+        "⚠️ هل تريد إرسال هذه الرسالة إلى المستخدمين؟",
         reply_markup=reply_kb([
-            ["â ØªØ£ÙÙØ¯ Ø§ÙØ¥Ø±Ø³Ø§Ù", "â Ø¥ÙØºØ§Ø¡"],
+            ["✅ تأكيد الإرسال", "❌ إلغاء"],
         ]),
     )
 
@@ -994,9 +1043,9 @@ async def execute_broadcast(update, context):
 
     context.user_data.clear()
     await update.effective_message.reply_text(
-        f"ð£ <b>Ø§ÙØªÙÙØª Ø§ÙØ±Ø³Ø§ÙØ© Ø§ÙØ¬ÙØ§Ø¹ÙØ©</b>\n\n"
-        f"â ØªÙ Ø§ÙØ¥Ø±Ø³Ø§Ù: {ok}\n"
-        f"â ØªØ¹Ø°Ø± Ø§ÙØ¥Ø±Ø³Ø§Ù: {fail}",
+        f"📣 <b>اكتملت الرسالة الجماعية</b>\n\n"
+        f"✅ تم الإرسال: {ok}\n"
+        f"❌ تعذر الإرسال: {fail}",
         parse_mode=ParseMode.HTML,
         reply_markup=admin_keyboard(),
     )
@@ -1017,9 +1066,9 @@ async def send_new_content_notifications(button_id, content_title):
         try:
             await telegram_app.bot.send_message(
                 row["user_id"],
-                f"ð <b>ÙØ­ØªÙÙ Ø¬Ø¯ÙØ¯</b>\n\n"
-                f"ð {html.escape(button['title'])}\n"
-                f"ð {html.escape(content_title)}",
+                f"🔔 <b>محتوى جديد</b>\n\n"
+                f"📚 {html.escape(button['title'])}\n"
+                f"📄 {html.escape(content_title)}",
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
@@ -1033,7 +1082,7 @@ async def send_new_content_notifications(button_id, content_title):
 async def add_button_start(update, context):
     context.user_data["state"] = "ADD_BUTTON_TITLE"
     await update.effective_message.reply_text(
-        "â Ø£Ø±Ø³Ù Ø§Ø³Ù Ø§ÙØ²Ø± Ø§ÙØ¬Ø¯ÙØ¯:",
+        "➕ أرسل اسم الزر الجديد:",
         reply_markup=cancel_keyboard(),
     )
 
@@ -1041,7 +1090,7 @@ async def add_button_start(update, context):
 async def edit_button_start(update, context):
     context.user_data["state"] = "EDIT_BUTTON_SELECT"
     await update.effective_message.reply_text(
-        "âï¸ Ø§Ø®ØªØ± Ø§ÙØ²Ø± Ø§ÙØ°Ù ØªØ±ÙØ¯ ØªØ¹Ø¯ÙÙÙ:",
+        "✏️ اختر الزر الذي تريد تعديله:",
         reply_markup=admin_button_selector(),
     )
 
@@ -1049,7 +1098,7 @@ async def edit_button_start(update, context):
 async def delete_button_start(update, context):
     context.user_data["state"] = "DELETE_BUTTON_SELECT"
     await update.effective_message.reply_text(
-        "ð Ø§Ø®ØªØ± Ø§ÙØ²Ø± Ø§ÙØ°Ù ØªØ±ÙØ¯ Ø­Ø°ÙÙ:",
+        "🗑 اختر الزر الذي تريد حذفه:",
         reply_markup=admin_button_selector(),
     )
 
@@ -1057,7 +1106,7 @@ async def delete_button_start(update, context):
 async def move_button_start(update, context):
     context.user_data["state"] = "MOVE_BUTTON_SELECT"
     await update.effective_message.reply_text(
-        "ð Ø§Ø®ØªØ± Ø§ÙØ²Ø± Ø§ÙØ°Ù ØªØ±ÙØ¯ ÙÙÙÙ:",
+        "🔄 اختر الزر الذي تريد نقله:",
         reply_markup=admin_button_selector(),
     )
 
@@ -1066,20 +1115,20 @@ async def handle_admin_text(update, context, state, text):
     # Settings editor
     if state == "ADMIN_SETTINGS":
         mapping = {
-            "âï¸ Ø§Ø³Ù Ø§ÙØ¨ÙØª": "bot_name",
-            "ð  Ø§Ø³Ù Ø§ÙØ±Ø¦ÙØ³ÙØ©": "home_title",
-            "ð ÙØµ Ø§ÙØ±Ø¦ÙØ³ÙØ©": "home_text",
-            "â¹ï¸ ÙØµ Ø­ÙÙ Ø§ÙØ¨ÙØª": "about_text",
-            "ð ÙØµ Ø§ÙØ§Ø´ØªØ±Ø§Ù": "subscription_text",
-            "ð  ÙØµ Ø§ÙØµÙØ§ÙØ©": "maintenance_text",
-            "ð ÙØµ Ø§ÙØ¥Ø´Ø¹Ø§Ø±Ø§Øª": "notifications_text",
-            "ð¢ ÙØµ Ø§ÙØ¥Ø¹ÙØ§Ù": "announcement_text",
+            "✏️ اسم البوت": "bot_name",
+            "🏠 اسم الرئيسية": "home_title",
+            "📝 نص الرئيسية": "home_text",
+            "ℹ️ نص حول البوت": "about_text",
+            "🔐 نص الاشتراك": "subscription_text",
+            "🛠 نص الصيانة": "maintenance_text",
+            "🔔 نص الإشعارات": "notifications_text",
+            "📢 نص الإعلان": "announcement_text",
         }
         if text in mapping:
             context.user_data["state"] = "SETTING_VALUE"
             context.user_data["setting_key"] = mapping[text]
             await update.effective_message.reply_text(
-                "âï¸ Ø£Ø±Ø³Ù Ø§ÙÙÙÙØ© Ø§ÙØ¬Ø¯ÙØ¯Ø©:",
+                "✍️ أرسل القيمة الجديدة:",
                 reply_markup=cancel_keyboard(),
             )
             return True
@@ -1090,7 +1139,7 @@ async def handle_admin_text(update, context, state, text):
             set_setting(key, text)
         context.user_data.clear()
         await update.effective_message.reply_text(
-            "â ØªÙ Ø­ÙØ¸ Ø§ÙØ¥Ø¹Ø¯Ø§Ø¯ Ø¨ÙØ¬Ø§Ø­.",
+            "✅ تم حفظ الإعداد بنجاح.",
             reply_markup=admin_keyboard(),
         )
         return True
@@ -1100,8 +1149,8 @@ async def handle_admin_text(update, context, state, text):
         context.user_data["new_button_title"] = text
         context.user_data["state"] = "ADD_BUTTON_PARENT"
         await update.effective_message.reply_text(
-            "ð Ø£ÙÙ ØªØ±ÙØ¯ ÙØ¶Ø¹ Ø§ÙØ²Ø±Ø\n\n"
-            "Ø£Ø±Ø³Ù ID Ø§ÙØ²Ø± Ø§ÙØ£Ø¨Ø Ø£Ù Ø§ÙØªØ¨ 0 ÙÙÙÙÙ ÙÙ Ø§ÙØ±Ø¦ÙØ³ÙØ©.",
+            "📁 أين تريد وضع الزر؟\n\n"
+            "أرسل ID الزر الأب، أو اكتب 0 ليكون في الرئيسية.",
             reply_markup=cancel_keyboard(),
         )
         return True
@@ -1113,12 +1162,12 @@ async def handle_admin_text(update, context, state, text):
                 raise ValueError
         except ValueError:
             await update.effective_message.reply_text(
-                "â ID ØºÙØ± ØµØ­ÙØ­. Ø£Ø±Ø³Ù Ø±ÙÙ Ø²Ø± ÙÙØ¬ÙØ¯ Ø£Ù 0."
+                "❌ ID غير صحيح. أرسل رقم زر موجود أو 0."
             )
             return True
 
         bid = add_button(
-            context.user_data.get("new_button_title", "ð Ø²Ø± Ø¬Ø¯ÙØ¯"),
+            context.user_data.get("new_button_title", "🔘 زر جديد"),
             parent_id,
             "menu",
             "",
@@ -1126,7 +1175,7 @@ async def handle_admin_text(update, context, state, text):
         context.user_data.clear()
 
         await update.effective_message.reply_text(
-            f"â ØªÙ Ø¥ÙØ´Ø§Ø¡ Ø§ÙØ²Ø±.\nð ID: <code>{bid}</code>",
+            f"✅ تم إنشاء الزر.\n🆔 ID: <code>{bid}</code>",
             parse_mode=ParseMode.HTML,
             reply_markup=admin_keyboard(),
         )
@@ -1136,55 +1185,55 @@ async def handle_admin_text(update, context, state, text):
     if state == "EDIT_BUTTON_SELECT":
         bid = parse_id_from_button_text(text)
         if not bid or not get_button(bid):
-            await update.effective_message.reply_text("â Ø§Ø®ØªØ± Ø²Ø±ÙØ§ ØµØ­ÙØ­ÙØ§.")
+            await update.effective_message.reply_text("❌ اختر زرًا صحيحًا.")
             return True
         context.user_data["edit_button_id"] = bid
         context.user_data["state"] = "EDIT_BUTTON_MENU"
         await update.effective_message.reply_text(
-            "âï¸ ÙØ§Ø°Ø§ ØªØ±ÙØ¯ ØªØ¹Ø¯ÙÙØ",
+            "✏️ ماذا تريد تعديل؟",
             reply_markup=reply_kb([
-                ["ð Ø§ÙØ§Ø³Ù", "ð Ø§ÙØ±Ø§Ø¨Ø·"],
-                ["ð¯ ÙÙØ¹ Ø§ÙØ¥Ø¬Ø±Ø§Ø¡"],
-                ["ð ØªÙØ¹ÙÙ/ØªØ¹Ø·ÙÙ"],
-                ["â¬ï¸ Ø±Ø¬ÙØ¹"],
+                ["📝 الاسم", "🔗 الرابط"],
+                ["🎯 نوع الإجراء"],
+                ["🔘 تفعيل/تعطيل"],
+                ["⬅️ رجوع"],
             ]),
         )
         return True
 
     if state == "EDIT_BUTTON_MENU":
         bid = context.user_data["edit_button_id"]
-        if text == "ð Ø§ÙØ§Ø³Ù":
+        if text == "📝 الاسم":
             context.user_data["state"] = "EDIT_BUTTON_NAME"
             await update.effective_message.reply_text(
-                "âï¸ Ø£Ø±Ø³Ù Ø§ÙØ§Ø³Ù Ø§ÙØ¬Ø¯ÙØ¯:", reply_markup=cancel_keyboard()
+                "✍️ أرسل الاسم الجديد:", reply_markup=cancel_keyboard()
             )
             return True
-        if text == "ð Ø§ÙØ±Ø§Ø¨Ø·":
+        if text == "🔗 الرابط":
             context.user_data["state"] = "EDIT_BUTTON_URL"
             await update.effective_message.reply_text(
-                "ð Ø£Ø±Ø³Ù Ø§ÙØ±Ø§Ø¨Ø·:", reply_markup=cancel_keyboard()
+                "🔗 أرسل الرابط:", reply_markup=cancel_keyboard()
             )
             return True
-        if text == "ð¯ ÙÙØ¹ Ø§ÙØ¥Ø¬Ø±Ø§Ø¡":
+        if text == "🎯 نوع الإجراء":
             context.user_data["state"] = "EDIT_BUTTON_ACTION"
             await update.effective_message.reply_text(
-                "Ø§Ø®ØªØ± Ø§ÙÙÙØ¹:",
+                "اختر النوع:",
                 reply_markup=reply_kb([
-                    ["ð ÙØ§Ø¦ÙØ©", "ð ÙØ­ØªÙÙ"],
-                    ["ð Ø¨Ø­Ø«", "â­ ÙÙØ¶ÙØ©"],
-                    ["ð Ø¥Ø´Ø¹Ø§Ø±Ø§Øª", "â­ ØªÙÙÙÙ"],
-                    ["ð¬ ÙØ±Ø§Ø³ÙØ©", "â¹ï¸ Ø­ÙÙ"],
-                    ["ð Ø±Ø§Ø¨Ø·"],
-                    ["â Ø¥ÙØºØ§Ø¡"],
+                    ["📂 قائمة", "📄 محتوى"],
+                    ["🔎 بحث", "⭐ مفضلة"],
+                    ["🔔 إشعارات", "⭐ تقييم"],
+                    ["💬 مراسلة", "ℹ️ حول"],
+                    ["🔗 رابط"],
+                    ["❌ إلغاء"],
                 ]),
             )
             return True
-        if text == "ð ØªÙØ¹ÙÙ/ØªØ¹Ø·ÙÙ":
+        if text == "🔘 تفعيل/تعطيل":
             b = get_button(bid)
             update_button(bid, enabled=0 if b["enabled"] else 1)
             context.user_data.clear()
             await update.effective_message.reply_text(
-                "â ØªÙ ØªØºÙÙØ± Ø­Ø§ÙØ© Ø§ÙØ²Ø±.",
+                "✅ تم تغيير حالة الزر.",
                 reply_markup=admin_keyboard(),
             )
             return True
@@ -1193,7 +1242,7 @@ async def handle_admin_text(update, context, state, text):
         update_button(context.user_data["edit_button_id"], title=text)
         context.user_data.clear()
         await update.effective_message.reply_text(
-            "â ØªÙ ØªØ¹Ø¯ÙÙ Ø§Ø³Ù Ø§ÙØ²Ø±.", reply_markup=admin_keyboard()
+            "✅ تم تعديل اسم الزر.", reply_markup=admin_keyboard()
         )
         return True
 
@@ -1205,21 +1254,21 @@ async def handle_admin_text(update, context, state, text):
         )
         context.user_data.clear()
         await update.effective_message.reply_text(
-            "â ØªÙ Ø­ÙØ¸ Ø§ÙØ±Ø§Ø¨Ø·.", reply_markup=admin_keyboard()
+            "✅ تم حفظ الرابط.", reply_markup=admin_keyboard()
         )
         return True
 
     if state == "EDIT_BUTTON_ACTION":
         mapping = {
-            "ð ÙØ§Ø¦ÙØ©": ("menu", ""),
-            "ð ÙØ­ØªÙÙ": ("content", ""),
-            "ð Ø¨Ø­Ø«": ("search", ""),
-            "â­ ÙÙØ¶ÙØ©": ("favorites", ""),
-            "ð Ø¥Ø´Ø¹Ø§Ø±Ø§Øª": ("notifications", ""),
-            "â­ ØªÙÙÙÙ": ("rating", ""),
-            "ð¬ ÙØ±Ø§Ø³ÙØ©": ("contact", ""),
-            "â¹ï¸ Ø­ÙÙ": ("about", ""),
-            "ð Ø±Ø§Ø¨Ø·": ("url", ""),
+            "📂 قائمة": ("menu", ""),
+            "📄 محتوى": ("content", ""),
+            "🔎 بحث": ("search", ""),
+            "⭐ مفضلة": ("favorites", ""),
+            "🔔 إشعارات": ("notifications", ""),
+            "⭐ تقييم": ("rating", ""),
+            "💬 مراسلة": ("contact", ""),
+            "ℹ️ حول": ("about", ""),
+            "🔗 رابط": ("url", ""),
         }
         if text in mapping:
             action, value = mapping[text]
@@ -1230,7 +1279,7 @@ async def handle_admin_text(update, context, state, text):
             )
             context.user_data.clear()
             await update.effective_message.reply_text(
-                "â ØªÙ ØªØ¹Ø¯ÙÙ ÙØ¸ÙÙØ© Ø§ÙØ²Ø±.",
+                "✅ تم تعديل وظيفة الزر.",
                 reply_markup=admin_keyboard(),
             )
             return True
@@ -1239,28 +1288,28 @@ async def handle_admin_text(update, context, state, text):
     if state == "DELETE_BUTTON_SELECT":
         bid = parse_id_from_button_text(text)
         if not bid or not get_button(bid):
-            await update.effective_message.reply_text("â Ø§Ø®ØªØ± Ø²Ø±ÙØ§ ØµØ­ÙØ­ÙØ§.")
+            await update.effective_message.reply_text("❌ اختر زرًا صحيحًا.")
             return True
 
         context.user_data["delete_button_id"] = bid
         context.user_data["state"] = "DELETE_CONFIRM"
         await update.effective_message.reply_text(
-            f"â ï¸ <b>ØªØ£ÙÙØ¯ Ø§ÙØ­Ø°Ù</b>\n\n"
-            f"Ø³ÙØªÙ Ø­Ø°Ù Ø§ÙØ²Ø± ÙÙÙ Ø§ÙØ£Ø²Ø±Ø§Ø± Ø§ÙÙÙØ¬ÙØ¯Ø© ØªØ­ØªÙ.\n\n"
-            f"ÙÙ Ø£ÙØª ÙØªØ£ÙØ¯Ø",
+            f"⚠️ <b>تأكيد الحذف</b>\n\n"
+            f"سيتم حذف الزر وكل الأزرار الموجودة تحته.\n\n"
+            f"هل أنت متأكد؟",
             parse_mode=ParseMode.HTML,
             reply_markup=reply_kb([
-                ["â ØªØ£ÙÙØ¯ Ø§ÙØ­Ø°Ù", "â Ø¥ÙØºØ§Ø¡"],
+                ["✅ تأكيد الحذف", "❌ إلغاء"],
             ]),
         )
         return True
 
     if state == "DELETE_CONFIRM":
-        if text == "â ØªØ£ÙÙØ¯ Ø§ÙØ­Ø°Ù":
+        if text == "✅ تأكيد الحذف":
             delete_button_tree(context.user_data["delete_button_id"])
             context.user_data.clear()
             await update.effective_message.reply_text(
-                "ð ØªÙ Ø§ÙØ­Ø°Ù Ø¨ÙØ¬Ø§Ø­.",
+                "🗑 تم الحذف بنجاح.",
                 reply_markup=admin_keyboard(),
             )
             return True
@@ -1269,12 +1318,12 @@ async def handle_admin_text(update, context, state, text):
     if state == "MOVE_BUTTON_SELECT":
         bid = parse_id_from_button_text(text)
         if not bid or not get_button(bid):
-            await update.effective_message.reply_text("â Ø§Ø®ØªØ± Ø²Ø±ÙØ§ ØµØ­ÙØ­ÙØ§.")
+            await update.effective_message.reply_text("❌ اختر زرًا صحيحًا.")
             return True
         context.user_data["move_button_id"] = bid
         context.user_data["state"] = "MOVE_BUTTON_PARENT"
         await update.effective_message.reply_text(
-            "ð Ø£Ø±Ø³Ù ID Ø§ÙØ²Ø± Ø§ÙØ£Ø¨ Ø§ÙØ¬Ø¯ÙØ¯Ø Ø£Ù 0 ÙÙØ±Ø¦ÙØ³ÙØ©:",
+            "🔄 أرسل ID الزر الأب الجديد، أو 0 للرئيسية:",
             reply_markup=cancel_keyboard(),
         )
         return True
@@ -1286,28 +1335,28 @@ async def handle_admin_text(update, context, state, text):
             if parent is not None and not get_button(parent):
                 raise ValueError
         except ValueError:
-            await update.effective_message.reply_text("â ID ØºÙØ± ØµØ­ÙØ­.")
+            await update.effective_message.reply_text("❌ ID غير صحيح.")
             return True
 
         context.user_data["state"] = "MOVE_CONFIRM"
         context.user_data["move_parent"] = parent
         await update.effective_message.reply_text(
-            "â ï¸ ØªØ£ÙÙØ¯ Ø§ÙÙÙÙØ",
+            "⚠️ تأكيد النقل؟",
             reply_markup=reply_kb([
-                ["â ØªØ£ÙÙØ¯ Ø§ÙÙÙÙ", "â Ø¥ÙØºØ§Ø¡"],
+                ["✅ تأكيد النقل", "❌ إلغاء"],
             ]),
         )
         return True
 
     if state == "MOVE_CONFIRM":
-        if text == "â ØªØ£ÙÙØ¯ Ø§ÙÙÙÙ":
+        if text == "✅ تأكيد النقل":
             ok = move_button(
                 context.user_data["move_button_id"],
                 context.user_data["move_parent"],
             )
             context.user_data.clear()
             await update.effective_message.reply_text(
-                "â ØªÙ Ø§ÙÙÙÙ Ø¨ÙØ¬Ø§Ø­." if ok else "â ØªØ¹Ø°Ø± Ø§ÙÙÙÙ.",
+                "✅ تم النقل بنجاح." if ok else "❌ تعذر النقل.",
                 reply_markup=admin_keyboard(),
             )
             return True
@@ -1316,43 +1365,43 @@ async def handle_admin_text(update, context, state, text):
     if state == "ADD_CONTENT_SELECT":
         bid = parse_id_from_button_text(text)
         if not bid or not get_button(bid):
-            await update.effective_message.reply_text("â Ø§Ø®ØªØ± Ø²Ø±ÙØ§ ØµØ­ÙØ­ÙØ§.")
+            await update.effective_message.reply_text("❌ اختر زرًا صحيحًا.")
             return True
         context.user_data["content_button_id"] = bid
         context.user_data["state"] = "ADD_CONTENT_WAIT"
         await update.effective_message.reply_text(
-            "ð¨ Ø£Ø±Ø³Ù Ø§ÙÙØ­ØªÙÙ Ø§ÙØ¢Ù.\n\n"
-            "Ø³ÙØªÙ Ø­ÙØ¸ Ø§ÙØ±Ø³Ø§ÙØ© Ø§ÙØ­Ø§ÙÙØ© ÙÙØ§ ÙÙ.",
+            "📨 أرسل المحتوى الآن.\n\n"
+            "سيتم حفظ الرسالة الحالية كما هي.",
             reply_markup=cancel_keyboard(),
         )
         return True
 
     if state == "DELETE_CONTENT_SELECT":
-        if not text.startswith("ð") or "ãC" not in text:
-            await update.effective_message.reply_text("â Ø§Ø®ØªØ± ÙØ­ØªÙÙ ØµØ­ÙØ­ÙØ§.")
+        if not text.startswith("📄") or "〔C" not in text:
+            await update.effective_message.reply_text("❌ اختر محتوى صحيحًا.")
             return True
         try:
-            cid = int(text.split("ãC", 1)[1].split("ã", 1)[0])
+            cid = int(text.split("〔C", 1)[1].split("〕", 1)[0])
         except ValueError:
-            await update.effective_message.reply_text("â ID ØºÙØ± ØµØ­ÙØ­.")
+            await update.effective_message.reply_text("❌ ID غير صحيح.")
             return True
 
         context.user_data["delete_content_id"] = cid
         context.user_data["state"] = "DELETE_CONTENT_CONFIRM"
         await update.effective_message.reply_text(
-            "â ï¸ ØªØ£ÙÙØ¯ Ø­Ø°Ù Ø§ÙÙØ­ØªÙÙØ",
+            "⚠️ تأكيد حذف المحتوى؟",
             reply_markup=reply_kb([
-                ["â ØªØ£ÙÙØ¯ Ø§ÙØ­Ø°Ù", "â Ø¥ÙØºØ§Ø¡"],
+                ["✅ تأكيد الحذف", "❌ إلغاء"],
             ]),
         )
         return True
 
     if state == "DELETE_CONTENT_CONFIRM":
-        if text == "â ØªØ£ÙÙØ¯ Ø§ÙØ­Ø°Ù":
+        if text == "✅ تأكيد الحذف":
             delete_content(context.user_data["delete_content_id"])
             context.user_data.clear()
             await update.effective_message.reply_text(
-                "ð ØªÙ Ø­Ø°Ù Ø§ÙÙØ­ØªÙÙ.",
+                "🗑 تم حذف المحتوى.",
                 reply_markup=admin_keyboard(),
             )
             return True
@@ -1391,14 +1440,14 @@ async def route_media(update, context):
 
         cid = add_content(bid, update.effective_message)
         c = get_content(cid)
-        title = c["title"] if c else "ÙØ­ØªÙÙ Ø¬Ø¯ÙØ¯"
+        title = c["title"] if c else "محتوى جديد"
 
         context.user_data.clear()
         await update.effective_message.reply_text(
-            f"ð <b>ÙØ¹Ø§ÙÙØ© Ø§ÙÙØ­ØªÙÙ</b>\n\n"
-            f"ð Ø§ÙØ²Ø±: {html.escape(get_button(bid)['title'])}\n"
-            f"ð {html.escape(title)}\n\n"
-            f"â ï¸ ØªÙ Ø§ÙØ­ÙØ¸ ÙØ§ÙÙØ´Ø±.",
+            f"👁 <b>معاينة المحتوى</b>\n\n"
+            f"📚 الزر: {html.escape(get_button(bid)['title'])}\n"
+            f"📄 {html.escape(title)}\n\n"
+            f"⚠️ تم الحفظ والنشر.",
             parse_mode=ParseMode.HTML,
             reply_markup=admin_keyboard(),
         )
@@ -1410,7 +1459,7 @@ async def route_media(update, context):
         mid = add_user_message(update)
         context.user_data.clear()
         await update.effective_message.reply_text(
-            "â ÙØµÙØª Ø±Ø³Ø§ÙØªÙ Ø¥ÙÙ Ø§ÙØ¥Ø¯Ø§Ø±Ø© â¤ï¸",
+            "✅ وصلت رسالتك إلى الإدارة ❤️",
             reply_markup=home_keyboard(),
         )
         try:
@@ -1421,7 +1470,7 @@ async def route_media(update, context):
             )
             await telegram_app.bot.send_message(
                 ADMIN_ID,
-                f"ð¬ Ø±Ø³Ø§ÙØ© Ø¬Ø¯ÙØ¯Ø© ÙÙ Ø§ÙÙØ³ØªØ®Ø¯Ù\nð <code>{user.id}</code>\nØ±ÙÙ: {mid}",
+                f"💬 رسالة جديدة من المستخدم\n🆔 <code>{user.id}</code>\nرقم: {mid}",
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
@@ -1462,7 +1511,7 @@ async def handle_text(update, context):
     save_user(user)
 
     if is_banned(user.id) and user.id != ADMIN_ID:
-        await update.message.reply_text("ð« ÙØ§ ÙÙÙÙÙ Ø§Ø³ØªØ®Ø¯Ø§Ù Ø§ÙØ¨ÙØª.")
+        await update.message.reply_text("🚫 لا يمكنك استخدام البوت.")
         return
 
     # Admin bypasses subscription and maintenance.
@@ -1471,85 +1520,85 @@ async def handle_text(update, context):
             await show_admin(update)
             return
 
-        if text == "âï¸ Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª Ø§ÙØ¨ÙØª":
+        if text == "⚙️ إعدادات البوت":
             await admin_settings(update, context); return
-        if text == "ð ÙØ­Ø±Ø± Ø§ÙØ£Ø²Ø±Ø§Ø±":
+        if text == "🎛 محرر الأزرار":
             await admin_buttons(update, context); return
-        if text == "ð ÙØ­Ø±Ø± Ø§ÙÙØ­ØªÙÙ":
+        if text == "📝 محرر المحتوى":
             await admin_content(update, context); return
-        if text == "ð£ Ø±Ø³Ø§ÙØ© Ø¬ÙØ§Ø¹ÙØ©":
+        if text == "📣 رسالة جماعية":
             await admin_broadcast_start(update, context); return
-        if text == "ð Ø§ÙÙØ¹Ø§ÙÙØ©":
+        if text == "👁 المعاينة":
             await admin_preview(update, context); return
-        if text == "ð Ø§ÙØ¥Ø­ØµØ§Ø¦ÙØ§Øª":
+        if text == "📊 الإحصائيات":
             await admin_stats(update, context); return
-        if text == "ð  Ø§ÙØµÙØ§ÙØ©":
+        if text == "🛠 الصيانة":
             current = get_setting("maintenance") == "1"
             set_setting("maintenance", "0" if current else "1")
             await update.message.reply_text(
-                f"ð  Ø§ÙØµÙØ§ÙØ© Ø§ÙØ¢Ù: {'ð¢ ÙØªÙÙÙØ©' if current else 'ð´ ÙÙØ¹ÙØ©'}",
+                f"🛠 الصيانة الآن: {'🟢 متوقفة' if current else '🔴 مفعلة'}",
                 reply_markup=admin_keyboard(),
             )
             return
-        if text == "ð  ÙØ§Ø¬ÙØ© Ø§ÙÙØ³ØªØ®Ø¯Ù":
+        if text == "🏠 واجهة المستخدم":
             await show_home(update); return
 
-        if text == "â Ø¥Ø¶Ø§ÙØ© Ø²Ø±":
+        if text == "➕ إضافة زر":
             await add_button_start(update, context); return
-        if text == "âï¸ ØªØ¹Ø¯ÙÙ Ø²Ø±":
+        if text == "✏️ تعديل زر":
             await edit_button_start(update, context); return
-        if text == "ð Ø­Ø°Ù Ø²Ø±":
+        if text == "🗑 حذف زر":
             await delete_button_start(update, context); return
-        if text == "ð ÙÙÙ Ø²Ø±":
+        if text == "🔄 نقل زر":
             await move_button_start(update, context); return
-        if text == "ð Ø¹Ø±Ø¶ Ø§ÙØ£Ø²Ø±Ø§Ø±":
+        if text == "📋 عرض الأزرار":
             rows = []
             for b in all_buttons():
                 rows.append(
-                    f"ð <code>{b['id']}</code> â {html.escape(b['title'])} "
-                    f"â {b['action_type']} â {'ð¢' if b['enabled'] else 'ð´'}"
+                    f"🔘 <code>{b['id']}</code> — {html.escape(b['title'])} "
+                    f"— {b['action_type']} — {'🟢' if b['enabled'] else '🔴'}"
                 )
             await update.message.reply_text(
-                "ð <b>Ø§ÙØ£Ø²Ø±Ø§Ø±</b>\n\n" + ("\n".join(rows) or "ÙØ§ ØªÙØ¬Ø¯."),
+                "📋 <b>الأزرار</b>\n\n" + ("\n".join(rows) or "لا توجد."),
                 parse_mode=ParseMode.HTML,
                 reply_markup=admin_keyboard(),
             )
             return
 
-        if text == "â Ø¥Ø¶Ø§ÙØ© ÙØ­ØªÙÙ":
+        if text == "➕ إضافة محتوى":
             context.user_data["state"] = "ADD_CONTENT_SELECT"
             await update.message.reply_text(
-                "ð Ø§Ø®ØªØ± Ø§ÙØ²Ø± Ø§ÙØ°Ù Ø³ÙØ­ØªÙÙ Ø¹ÙÙ Ø§ÙÙØ­ØªÙÙ:",
+                "📚 اختر الزر الذي سيحتوي على المحتوى:",
                 reply_markup=admin_button_selector(),
             )
             return
 
-        if text == "ð Ø­Ø°Ù ÙØ­ØªÙÙ":
+        if text == "🗑 حذف محتوى":
             contents = []
             for b in all_buttons():
                 for c in get_contents(b["id"], False):
                     contents.append([KeyboardButton(
-                        f"ð {c['title'][:50]} ãC{c['id']}ã"
+                        f"📄 {c['title'][:50]} 〔C{c['id']}〕"
                     )])
-            contents.append([KeyboardButton("â Ø¥ÙØºØ§Ø¡")])
+            contents.append([KeyboardButton("❌ إلغاء")])
             context.user_data["state"] = "DELETE_CONTENT_SELECT"
             await update.message.reply_text(
-                "ð Ø§Ø®ØªØ± Ø§ÙÙØ­ØªÙÙ:",
+                "🗑 اختر المحتوى:",
                 reply_markup=reply_kb(contents),
             )
             return
 
-        if text == "ð¥ Ø§ÙÙØ³ØªØ®Ø¯ÙÙÙ":
+        if text == "👥 المستخدمون":
             conn = db()
             rows = conn.execute("""
                 SELECT user_id,first_name,username,banned,notifications
                 FROM users ORDER BY last_seen DESC LIMIT 30
             """).fetchall()
             conn.close()
-            lines = ["ð¥ <b>Ø§ÙÙØ³ØªØ®Ø¯ÙÙÙ</b>\n"]
+            lines = ["👥 <b>المستخدمون</b>\n"]
             for r in rows:
                 lines.append(
-                    f"{'ð«' if r['banned'] else 'ð¢'} "
+                    f"{'🚫' if r['banned'] else '🟢'} "
                     f"<code>{r['user_id']}</code> "
                     f"{html.escape(r['first_name'] or '-')}"
                 )
@@ -1560,10 +1609,10 @@ async def handle_text(update, context):
             )
             return
 
-        if text == "ð¢ Ø§ÙØ¥Ø¹ÙØ§Ù":
+        if text == "📢 الإعلان":
             context.user_data["state"] = "ADMIN_ANNOUNCEMENT"
             await update.message.reply_text(
-                "ð¢ Ø£Ø±Ø³Ù Ø§ÙØ¥Ø¹ÙØ§Ù. Ø³ØªØ¸ÙØ± ÙÙ Ø§ÙÙØ¹Ø§ÙÙØ© ÙØ¨Ù Ø§ÙÙØ´Ø±.",
+                "📢 أرسل الإعلان. ستظهر لك المعاينة قبل النشر.",
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -1573,9 +1622,9 @@ async def handle_text(update, context):
         if state == "ADMIN_BROADCAST":
             await broadcast_preview(update, context); return
         if state == "ADMIN_BROADCAST_CONFIRM":
-            if text == "â ØªØ£ÙÙØ¯ Ø§ÙØ¥Ø±Ø³Ø§Ù":
+            if text == "✅ تأكيد الإرسال":
                 await execute_broadcast(update, context)
-            elif text == "â Ø¥ÙØºØ§Ø¡":
+            elif text == "❌ إلغاء":
                 context.user_data.clear()
                 await show_admin(update)
             return
@@ -1585,9 +1634,9 @@ async def handle_text(update, context):
             context.user_data["broadcast_chat_id"] = update.effective_chat.id
             context.user_data["broadcast_message_id"] = update.message.message_id
             await update.message.reply_text(
-                "ð ÙØ¹Ø§ÙÙØ© Ø§ÙØ¥Ø¹ÙØ§Ù Ø¬Ø§ÙØ²Ø©.\n\nâ ï¸ ØªØ£ÙÙØ¯ Ø§ÙÙØ´Ø±Ø",
+                "👁 معاينة الإعلان جاهزة.\n\n⚠️ تأكيد النشر؟",
                 reply_markup=reply_kb([
-                    ["â ØªØ£ÙÙØ¯ Ø§ÙØ¥Ø±Ø³Ø§Ù", "â Ø¥ÙØºØ§Ø¡"]
+                    ["✅ تأكيد الإرسال", "❌ إلغاء"]
                 ]),
             )
             return
@@ -1595,7 +1644,7 @@ async def handle_text(update, context):
         if state and await handle_admin_text(update, context, state, text):
             return
 
-        if text == "â¬ï¸ Ø±Ø¬ÙØ¹" or text == "â Ø¥ÙØºØ§Ø¡":
+        if text == "⬅️ رجوع" or text == "❌ إلغاء":
             context.user_data.clear()
             await show_admin(update)
             return
@@ -1604,7 +1653,7 @@ async def handle_text(update, context):
     if get_setting("maintenance") == "1":
         await update.message.reply_text(
             get_setting("maintenance_text"),
-            reply_markup=reply_kb([["ð ØªØ­Ø¯ÙØ«"]]),
+            reply_markup=reply_kb([["🔄 تحديث"]]),
         )
         return
 
@@ -1632,17 +1681,17 @@ async def handle_text(update, context):
         context.user_data.clear()
         if not rows:
             await update.message.reply_text(
-                "ð ÙÙ Ø£Ø¬Ø¯ ÙØªØ§Ø¦Ø¬.",
+                "🔎 لم أجد نتائج.",
                 reply_markup=home_keyboard(),
             )
             return
 
         await update.message.reply_text(
-            "ð <b>ÙØªØ§Ø¦Ø¬ Ø§ÙØ¨Ø­Ø«</b>",
+            "🔎 <b>نتائج البحث</b>",
             parse_mode=ParseMode.HTML,
             reply_markup=reply_kb(
                 [[KeyboardButton(r["title"])] for r in rows] +
-                [["ð  Ø§ÙØ±Ø¦ÙØ³ÙØ©"]]
+                [["🏠 الرئيسية"]]
             ),
         )
         return
@@ -1653,34 +1702,34 @@ async def handle_text(update, context):
         try:
             await telegram_app.bot.send_message(
                 ADMIN_ID,
-                f"ð¬ <b>Ø±Ø³Ø§ÙØ© Ø¬Ø¯ÙØ¯Ø© #{mid}</b>\n"
-                f"ð¤ {html.escape(user.full_name)}\n"
-                f"ð <code>{user.id}</code>\n\n"
+                f"💬 <b>رسالة جديدة #{mid}</b>\n"
+                f"👤 {html.escape(user.full_name)}\n"
+                f"🆔 <code>{user.id}</code>\n\n"
                 f"{html.escape(text)}",
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
             pass
         await update.message.reply_text(
-            "â ÙØµÙØª Ø±Ø³Ø§ÙØªÙ ÙÙØ¥Ø¯Ø§Ø±Ø©.",
+            "✅ وصلت رسالتك للإدارة.",
             reply_markup=home_keyboard(),
         )
         return
 
     if state == "USER_RATING":
-        if text.startswith("â­"):
-            rating = min(5, text.count("â­"))
+        if text.startswith("⭐"):
+            rating = min(5, text.count("⭐"))
             context.user_data["rating"] = rating
             context.user_data["state"] = "USER_RATING_COMMENT"
             await update.message.reply_text(
-                "âï¸ Ø§ÙØªØ¨ ÙÙØ§Ø­Ø¸ØªÙ Ø£Ù Ø§ÙØªØ¨ Â«Ø¨Ø¯ÙÙ ÙÙØ§Ø­Ø¸Ø©Â»:",
+                "✍️ اكتب ملاحظتك أو اكتب «بدون ملاحظة»:",
                 reply_markup=cancel_keyboard(),
             )
         return
 
     if state == "USER_RATING_COMMENT":
         rating = context.user_data.get("rating", 5)
-        comment = "" if text == "Ø¨Ø¯ÙÙ ÙÙØ§Ø­Ø¸Ø©" else text
+        comment = "" if text == "بدون ملاحظة" else text
         conn = db()
         conn.execute("""
             INSERT INTO ratings(user_id,rating,comment,created_at)
@@ -1690,52 +1739,52 @@ async def handle_text(update, context):
         conn.close()
         context.user_data.clear()
         await update.message.reply_text(
-            "â¤ï¸ Ø´ÙØ±Ø§Ù Ø¹ÙÙ ØªÙÙÙÙÙ!",
+            "❤️ شكراً على تقييمك!",
             reply_markup=home_keyboard(),
         )
         return
 
-    if text in ("ð  Ø§ÙØ±Ø¦ÙØ³ÙØ©", "ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©", "/start"):
+    if text in ("🏠 الرئيسية", "🏠 القائمة الرئيسية", "/start"):
         context.user_data.clear()
         await show_home(update)
         return
 
-    if text == "ð ØªØ­Ø¯ÙØ«":
+    if text == "🔄 تحديث":
         await show_home(update)
         return
 
-    if text == "ð ØªÙØ¹ÙÙ Ø§ÙØ¥Ø´Ø¹Ø§Ø±Ø§Øª":
+    if text == "🔔 تفعيل الإشعارات":
         set_notifications(user.id, True)
         await update.message.reply_text(
-            "ð ØªÙ ØªÙØ¹ÙÙ Ø§ÙØ¥Ø´Ø¹Ø§Ø±Ø§Øª. Ø³ØªØµÙÙ ØªØ­Ø¯ÙØ«Ø§Øª Ø§ÙÙØ­ØªÙÙ Ø§ÙØ¬Ø¯ÙØ¯.",
+            "🔔 تم تفعيل الإشعارات. ستصلك تحديثات المحتوى الجديد.",
             reply_markup=home_keyboard(),
         )
         return
 
-    if text == "ð Ø¥ÙÙØ§Ù Ø§ÙØ¥Ø´Ø¹Ø§Ø±Ø§Øª":
+    if text == "🔕 إيقاف الإشعارات":
         set_notifications(user.id, False)
         await update.message.reply_text(
-            "ð ØªÙ Ø¥ÙÙØ§Ù Ø§ÙØ¥Ø´Ø¹Ø§Ø±Ø§Øª.",
+            "🔕 تم إيقاف الإشعارات.",
             reply_markup=home_keyboard(),
         )
         return
 
-    if text in ("â­ Ø¥Ø¶Ø§ÙØ© ÙÙÙÙØ¶ÙØ©", "ð Ø¥Ø²Ø§ÙØ© ÙÙ Ø§ÙÙÙØ¶ÙØ©"):
+    if text in ("⭐ إضافة للمفضلة", "💔 إزالة من المفضلة"):
         state_button = context.user_data.get("last_button_id")
         if state_button:
             added = toggle_favorite(user.id, state_button)
             await update.message.reply_text(
-                "â­ ØªÙØª Ø§ÙØ¥Ø¶Ø§ÙØ© ÙÙÙÙØ¶ÙØ©." if added else "ð ØªÙØª Ø§ÙØ¥Ø²Ø§ÙØ© ÙÙ Ø§ÙÙÙØ¶ÙØ©.",
+                "⭐ تمت الإضافة للمفضلة." if added else "💔 تمت الإزالة من المفضلة.",
                 reply_markup=home_keyboard(),
             )
         else:
             await show_favorites(update)
         return
 
-    # Content button selection: ð ... ãCidã
-    if "ãC" in text and text.startswith("ð"):
+    # Content button selection: 📄 ... 〔Cid〕
+    if "〔C" in text and text.startswith("📄"):
         try:
-            cid = int(text.split("ãC", 1)[1].split("ã", 1)[0])
+            cid = int(text.split("〔C", 1)[1].split("〕", 1)[0])
             c = get_content(cid)
             if c:
                 context.user_data["last_button_id"] = c["button_id"]
@@ -1764,7 +1813,7 @@ async def handle_text(update, context):
         return
 
     await update.message.reply_text(
-        "ð¤ ÙØ§ ÙÙÙØª Ø§Ø®ØªÙØ§Ø±Ù.\n\nØ¬Ø±ÙØ¨ Ø£Ø­Ø¯ Ø§ÙØ£Ø²Ø±Ø§Ø± Ø§ÙØ¸Ø§ÙØ±Ø©.",
+        "🤔 ما فهمت اختيارك.\n\nجرّب أحد الأزرار الظاهرة.",
         reply_markup=home_keyboard(),
     )
 
@@ -1780,18 +1829,18 @@ async def callback_router(update, context):
 
     if query.data == "SUB:CHECK":
         if not REQUIRED_CHANNEL:
-            await query.edit_message_text("â ÙØ§ ÙÙØ¬Ø¯ Ø§Ø´ØªØ±Ø§Ù Ø¥Ø¬Ø¨Ø§Ø±Ù Ø­Ø§ÙÙØ§Ù.")
+            await query.edit_message_text("✅ لا يوجد اشتراك إجباري حالياً.")
             return
 
         if await subscription_required(user.id):
             await query.edit_message_text(
-                "â ÙÙ ÙØªÙ Ø§ÙØªØ­ÙÙ ÙÙ Ø§Ø´ØªØ±Ø§ÙÙ Ø¨Ø¹Ø¯.\n"
-                "Ø§Ø´ØªØ±Ù Ø¨Ø§ÙÙÙØ§Ø© Ø«Ù Ø§Ø¶ØºØ· ØªØ­ÙÙ ÙØ±Ø© Ø£Ø®Ø±Ù."
+                "❌ لم يتم التحقق من اشتراكك بعد.\n"
+                "اشترك بالقناة ثم اضغط تحقق مرة أخرى."
             )
         else:
             await query.edit_message_text(
-                "â ØªÙ Ø§ÙØªØ­ÙÙ ÙÙ Ø§Ø´ØªØ±Ø§ÙÙ Ø¨ÙØ¬Ø§Ø­!\n"
-                "Ø§Ø±Ø¬Ø¹ ÙÙØ¨ÙØª ÙØ§Ø®ØªØ± ÙØ§ ØªØ±ÙØ¯."
+                "✅ تم التحقق من اشتراكك بنجاح!\n"
+                "ارجع للبوت واختر ما تريد."
             )
         return
 
@@ -1804,7 +1853,7 @@ async def start(update, context):
     save_user(update.effective_user)
 
     if is_banned(update.effective_user.id) and update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("ð« ØªÙ Ø­Ø¸Ø±Ù ÙÙ Ø§Ø³ØªØ®Ø¯Ø§Ù Ø§ÙØ¨ÙØª.")
+        await update.message.reply_text("🚫 تم حظرك من استخدام البوت.")
         return
 
     if update.effective_user.id != ADMIN_ID:
@@ -1852,7 +1901,7 @@ async def post_init(application):
 def build_application():
     if not BOT_TOKEN:
         raise RuntimeError(
-            "BOT_TOKEN ØºÙØ± ÙÙØ¬ÙØ¯. Ø£Ø¶ÙÙ ÙÙ Environment Variables Ø¹ÙÙ Render."
+            "BOT_TOKEN غير موجود. أضفه في Environment Variables على Render."
         )
 
     application = (
@@ -1865,11 +1914,9 @@ def build_application():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin", show_admin))
     application.add_handler(CallbackQueryHandler(callback_router))
+    # One non-command router handles both text and media.
     application.add_handler(
         MessageHandler(filters.ALL & ~filters.COMMAND, route_media)
-    )
-    application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
     )
     return application
 
@@ -1940,6 +1987,7 @@ def telegram_worker(application):
 
 def run():
     init_db()
+    repair_database_text()
     application = build_application()
 
     # Telegram runs on its own asyncio loop.

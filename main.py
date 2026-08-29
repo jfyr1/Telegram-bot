@@ -14,6 +14,8 @@ IMPORTANT:
 """
 
 import os
+import asyncio
+import threading
 import html
 import sqlite3
 import logging
@@ -1841,16 +1843,18 @@ def webhook():
 
 
 async def post_init(application):
+    # Kept as a harmless hook for Application.builder().post_init().
+    # The worker sets telegram_app and configures webhook/polling explicitly.
     global telegram_app
     telegram_app = application
 
-    if WEBHOOK_URL:
-        url = WEBHOOK_URL.rstrip("/") + "/" + WEBHOOK_PATH
-        await application.bot.set_webhook(url=url)
-        logger.info("Webhook configured: %s", url)
-
 
 def build_application():
+    if not BOT_TOKEN:
+        raise RuntimeError(
+            "BOT_TOKEN ØºÙØ± ÙÙØ¬ÙØ¯. Ø£Ø¶ÙÙ ÙÙ Environment Variables Ø¹ÙÙ Render."
+        )
+
     application = (
         Application.builder()
         .token(BOT_TOKEN)
@@ -1870,24 +1874,90 @@ def build_application():
     return application
 
 
+def telegram_worker(application):
+    """Run python-telegram-bot on its own asyncio event loop.
+
+    This avoids the Render/Python error:
+    RuntimeError: There is no current event loop in thread 'MainThread'
+    and correctly awaits Updater.start_polling().
+    """
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    async def start_bot():
+        global telegram_app
+        await application.initialize()
+        telegram_app = application
+        await application.start()
+
+        if WEBHOOK_URL:
+            url = WEBHOOK_URL.rstrip("/") + "/" + WEBHOOK_PATH
+            await application.bot.set_webhook(
+                url=url,
+                drop_pending_updates=False,
+                allowed_updates=Update.ALL_TYPES,
+            )
+            logger.info("Webhook configured: %s", url)
+        else:
+            # IMPORTANT: start_polling() is a coroutine in current PTB.
+            # It must be awaited inside a running event loop.
+            await application.updater.start_polling(
+                drop_pending_updates=True,
+                allowed_updates=Update.ALL_TYPES,
+            )
+            logger.info("Polling started successfully.")
+
+    try:
+        loop.run_until_complete(start_bot())
+        loop.run_forever()
+    except Exception:
+        logger.exception("Telegram worker stopped.")
+    finally:
+        async def stop_bot():
+            try:
+                if application.updater and application.updater.running:
+                    await application.updater.stop()
+            except Exception:
+                logger.exception("Failed to stop updater.")
+
+            try:
+                if application.running:
+                    await application.stop()
+            except Exception:
+                logger.exception("Failed to stop application.")
+
+            try:
+                await application.shutdown()
+            except Exception:
+                logger.exception("Failed to shutdown application.")
+
+        try:
+            loop.run_until_complete(stop_bot())
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+
+
 def run():
     init_db()
     application = build_application()
 
-    if WEBHOOK_URL:
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=WEBHOOK_PATH,
-            webhook_url=WEBHOOK_URL.rstrip("/") + "/" + WEBHOOK_PATH,
-            drop_pending_updates=False,
-        )
-    else:
-        application.run_polling(
-            drop_pending_updates=True,
-            allowed_updates=Update.ALL_TYPES,
-        )
+    # Telegram runs on its own asyncio loop.
+    t = threading.Thread(
+        target=telegram_worker,
+        args=(application,),
+        name="TelegramWorker",
+        daemon=True,
+    )
+    t.start()
 
+    # Render requires the HTTP server to listen on its assigned PORT.
+    app.run(
+        host="0.0.0.0",
+        port=PORT,
+        threaded=True,
+        use_reloader=False,
+    )
 
 if __name__ == "__main__":
     run()

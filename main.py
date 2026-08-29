@@ -1,35 +1,36 @@
 # -*- coding: utf-8 -*-
 """
-Telegram Menu Builder style bot - standalone implementation.
+Telegram Universal MenuBuilder-style Bot
+Python 3.11+
+python-telegram-bot 21.x
+Flask webhook / Render or polling-friendly local mode
+SQLite
 
-Requirements:
-    python-telegram-bot>=21,<23
-
-Environment:
-    BOT_TOKEN       - required
-    REQUIRED_CHANNEL - required channel username such as @mychannel
-    ADMIN_ID        - optional; defaults to 5734654153
-    DB_PATH         - optional; defaults to bot.db
-
-The implementation is inspired by common Telegram menu-builder UX patterns.
-It does not copy MenuBuilder's proprietary source code or branding.
+IMPORTANT:
+- Put BOT_TOKEN and ADMIN_ID in Environment Variables.
+- Optional REQUIRED_CHANNEL = @channel_username
+- Optional REQUIRED_CHANNEL_URL = https://t.me/channel_username
+- Never put your BotFather token directly in this file.
 """
 
 import os
-import time
+import asyncio
+import threading
+import html
 import sqlite3
 import logging
-from contextlib import contextmanager
-from typing import Optional, List, Tuple
+from datetime import datetime, timezone
+from functools import wraps
 
+from flask import Flask, request
 from telegram import (
     Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
     KeyboardButton,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
 )
-from telegram.constants import ChatMemberStatus
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -39,1343 +40,1984 @@ from telegram.ext import (
     filters,
 )
 
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    level=logging.INFO,
-)
-log = logging.getLogger("menu_builder_bot")
+# ============================================================
+# CONFIG
+# ============================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+
+# معرف الأدمن الأساسي
+# مثبت حسب طلبك حتى لا يتحول الأدمن إلى مستخدم بسبب Environment Variable خاطئ.
 ADMIN_ID = 5734654153
+
+PORT = int(os.getenv("PORT", "10000") or 10000)
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
+WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "telegram-webhook").strip("/")
+
+DB_FILE = os.getenv("DB_FILE", "bot.db")
+
+# Example: @my_channel
 REQUIRED_CHANNEL = os.getenv("REQUIRED_CHANNEL", "").strip()
-DB_PATH = os.getenv("DB_PATH", "bot.db")
+# Example: https://t.me/my_channel
+REQUIRED_CHANNEL_URL = os.getenv("REQUIRED_CHANNEL_URL", "").strip()
 
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is missing from Environment Variables")
+    raise RuntimeError("BOT_TOKEN is missing.")
+if not ADMIN_ID:
+    raise RuntimeError("ADMIN_ID is missing.")
 
-if not REQUIRED_CHANNEL:
-    log.warning(
-        "REQUIRED_CHANNEL is not configured. Subscription gate will ask the admin "
-        "to configure it before normal users can enter."
-    )
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+logger = logging.getLogger("universal-menu-bot")
 
-# ---------------------------------------------------------------------------
-# Database
-# ---------------------------------------------------------------------------
+app = Flask(__name__)
+telegram_app = None
 
-@contextmanager
+
+# ============================================================
+# DATABASE
+# ============================================================
+
 def db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_FILE, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def repair_mojibake(value):
+    """Repair common UTF-8 text that was accidentally decoded as Latin-1."""
+    if not isinstance(value, str):
+        return value
+
+    # These markers are characteristic of UTF-8 -> Latin-1/Windows-1252
+    # corruption, e.g. Ø§Ù„... or ðŸ....
+    markers = ("Ø", "Ù", "Ã", "Â", "Ð", "Ñ", "ð", "Ÿ", "�")
+    if not any(marker in value for marker in markers):
+        return value
+
+    candidate = value
+    for _ in range(2):
+        try:
+            fixed = candidate.encode("latin-1").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            break
+        if fixed == candidate:
+            break
+        candidate = fixed
+
+    return candidate
+
+
+def repair_database_text():
+    """Repair old Arabic/emoji text already saved in SQLite."""
+    conn = db()
     try:
-        yield conn
+        tables = {
+            "settings": ["value"],
+            "buttons": ["title", "action_value"],
+            "contents": ["title"],
+            "messages": ["text"],
+        }
+
+        for table, columns in tables.items():
+            for column in columns:
+                rows = conn.execute(
+                    f"SELECT rowid, {column} FROM {table}"
+                ).fetchall()
+
+                for row in rows:
+                    old = row[1]
+                    fixed = repair_mojibake(old)
+                    if fixed != old:
+                        conn.execute(
+                            f"UPDATE {table} SET {column}=? WHERE rowid=?",
+                            (fixed, row[0]),
+                        )
+
         conn.commit()
+    except Exception:
+        conn.rollback()
+        logger.exception("Failed to repair old UTF-8 text.")
     finally:
         conn.close()
 
 
 def init_db():
-    with db() as c:
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )
-        """)
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            first_name TEXT,
-            username TEXT,
-            notifications INTEGER NOT NULL DEFAULT 1,
-            joined_at INTEGER NOT NULL
-        )
-        """)
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS buttons (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            parent_id INTEGER,
-            title TEXT NOT NULL,
-            kind TEXT NOT NULL DEFAULT 'menu',
-            target TEXT,
-            admin_only INTEGER NOT NULL DEFAULT 0,
-            hidden INTEGER NOT NULL DEFAULT 0,
-            sort_order INTEGER NOT NULL DEFAULT 0
-        )
-        """)
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS posts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            button_id INTEGER UNIQUE NOT NULL,
-            text TEXT,
-            media_type TEXT,
-            file_id TEXT,
-            updated_at INTEGER NOT NULL
-        )
-        """)
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS ratings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            button_id INTEGER NOT NULL,
-            rating INTEGER NOT NULL,
-            created_at INTEGER NOT NULL
-        )
-        """)
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS user_state (
-            user_id INTEGER PRIMARY KEY,
-            menu_id INTEGER,
-            editor_menu_id INTEGER,
-            selected_button_id INTEGER,
-            state TEXT,
-            temp_text TEXT,
-            temp_id INTEGER,
-            updated_at INTEGER NOT NULL
-        )
-        """)
+    conn = db()
+    cur = conn.cursor()
+
+    cur.executescript("""
+    CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        first_name TEXT DEFAULT '',
+        last_name TEXT DEFAULT '',
+        username TEXT DEFAULT '',
+        joined_at TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        visits INTEGER DEFAULT 0,
+        banned INTEGER DEFAULT 0,
+        notifications INTEGER DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS buttons (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        parent_id INTEGER,
+        title TEXT NOT NULL,
+        action_type TEXT NOT NULL DEFAULT 'section',
+        action_value TEXT DEFAULT '',
+        position INTEGER DEFAULT 0,
+        enabled INTEGER DEFAULT 1,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(parent_id) REFERENCES buttons(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS contents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        button_id INTEGER NOT NULL,
+        source_chat_id INTEGER NOT NULL,
+        source_message_id INTEGER NOT NULL,
+        content_type TEXT DEFAULT 'message',
+        title TEXT DEFAULT '',
+        published INTEGER DEFAULT 1,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(button_id) REFERENCES buttons(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS favorites (
+        user_id INTEGER NOT NULL,
+        button_id INTEGER NOT NULL,
+        PRIMARY KEY(user_id, button_id),
+        FOREIGN KEY(button_id) REFERENCES buttons(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS ratings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        button_id INTEGER,
+        rating INTEGER NOT NULL,
+        comment TEXT DEFAULT '',
+        created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        text TEXT DEFAULT '',
+        source_chat_id INTEGER,
+        source_message_id INTEGER,
+        created_at TEXT NOT NULL,
+        answered INTEGER DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS drafts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        admin_id INTEGER NOT NULL,
+        target_type TEXT NOT NULL,
+        target_id INTEGER,
+        source_chat_id INTEGER,
+        source_message_id INTEGER,
+        title TEXT DEFAULT '',
+        created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS visits (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        button_id INTEGER,
+        created_at TEXT NOT NULL
+    );
+    """)
 
     defaults = {
-        "home_title": "🏠 القائمة الرئيسية",
-        "welcome_text": "👋 أهلاً بك!\nاختر من القائمة أدناه.",
+        "bot_name": "🤖 المساعد الذكي",
+        "home_title": "🏠 الرئيسية",
+        "home_text": "👋 أهلاً بك!\n\n✨ اختر من القائمة أدناه:",
+        "about_text": "ℹ️ <b>حول البوت</b>\n\nبوت عام قابل للتخصيص بالكامل من لوحة الإدارة.",
         "maintenance": "0",
-        "maintenance_text": "🛠️ البوت تحت الصيانة حالياً. حاول لاحقاً.",
-        "subscribe_text": "🔐 لاستخدام البوت، يجب الاشتراك بالقناة أولاً.",
-        "subscribe_button": "📢 الاشتراك بالقناة",
-        "verify_button": "✅ تحقق من الاشتراك",
+        "maintenance_text": "🛠 البوت حالياً تحت الصيانة.\n\n⏳ حاول لاحقاً.",
+        "subscription_text": "🔐 للوصول إلى البوت، يرجى الاشتراك بالقناة أولاً ثم الضغط على زر التحقق.",
+        "notifications_text": "🔔 هل تريد استقبال إشعارات عند إضافة محتوى جديد؟",
+        "announcement_text": "📢 إعلان جديد",
     }
-    with db() as c:
-        for k, v in defaults.items():
-            c.execute(
-                "INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)",
-                (k, v),
-            )
 
-        count = c.execute(
-            "SELECT COUNT(*) AS n FROM buttons WHERE parent_id IS NULL"
-        ).fetchone()["n"]
-        if count == 0:
-            seeds = [
-                ("📚 المواد الدراسية", "menu"),
-                ("📝 الملخصات", "menu"),
-                ("🧠 اختبارات MCQ", "menu"),
-                ("⭐ المفضلة", "favorites"),
-                ("💬 تواصل معنا", "contact"),
-            ]
-            for i, (title, kind) in enumerate(seeds):
-                c.execute(
-                    """INSERT INTO buttons(parent_id,title,kind,sort_order)
-                       VALUES(NULL,?,?,?)""",
-                    (title, kind, i),
-                )
-
-
-def get_required_channel() -> str:
-    return get_setting("required_channel", REQUIRED_CHANNEL).strip()
-
-
-def get_setting(key: str, default: str = "") -> str:
-    with db() as c:
-        row = c.execute(
-            "SELECT value FROM settings WHERE key=?", (key,)
-        ).fetchone()
-    return row["value"] if row else default
-
-
-def set_setting(key: str, value: str):
-    with db() as c:
-        c.execute(
-            "INSERT INTO settings(key,value) VALUES(?,?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+    for key, value in defaults.items():
+        cur.execute(
+            "INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)",
             (key, value),
         )
 
+    # Default root buttons. Admin can rename/delete/reorder them.
+    root_count = cur.execute(
+        "SELECT COUNT(*) AS c FROM buttons WHERE parent_id IS NULL"
+    ).fetchone()["c"]
 
-def upsert_user(user):
-    if not user:
-        return
-    with db() as c:
-        c.execute(
-            """INSERT INTO users(user_id,first_name,username,joined_at)
-               VALUES(?,?,?,?)
-               ON CONFLICT(user_id) DO UPDATE SET
-                 first_name=excluded.first_name,
-                 username=excluded.username""",
-            (
-                user.id,
-                user.first_name or "",
-                user.username or "",
-                int(time.time()),
-            ),
-        )
+    if root_count == 0:
+        roots = [
+            ("📚 الأقسام", "menu"),
+            ("⭐ المفضلة", "favorites"),
+            ("🔎 البحث", "search"),
+            ("🔔 الإشعارات", "notifications"),
+            ("⭐ تقييم البوت", "rating"),
+            ("💬 مراسلة الإدارة", "contact"),
+            ("ℹ️ حول البوت", "about"),
+        ]
+        for pos, (title, action) in enumerate(roots):
+            cur.execute("""
+                INSERT INTO buttons
+                (parent_id,title,action_type,action_value,position,created_at)
+                VALUES(NULL,?,?,?,?,?)
+            """, (title, action, "", pos, now()))
+
+    conn.commit()
+    conn.close()
+
+    # Fix text saved by older corrupted versions of the bot.
+    repair_database_text()
 
 
-def get_state(user_id: int):
-    with db() as c:
-        row = c.execute(
-            "SELECT * FROM user_state WHERE user_id=?", (user_id,)
-        ).fetchone()
+# ============================================================
+# SETTINGS / DB HELPERS
+# ============================================================
+
+def get_setting(key, default=""):
+    conn = db()
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key=?", (key,)
+    ).fetchone()
+    conn.close()
+    return repair_mojibake(row["value"]) if row else default
+
+
+def set_setting(key, value):
+    conn = db()
+    conn.execute("""
+        INSERT INTO settings(key,value) VALUES(?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+    """, (key, value))
+    conn.commit()
+    conn.close()
+
+
+def save_user(user):
+    conn = db()
+    stamp = now()
+    exists = conn.execute(
+        "SELECT user_id FROM users WHERE user_id=?", (user.id,)
+    ).fetchone()
+
+    if exists:
+        conn.execute("""
+            UPDATE users
+            SET first_name=?, last_name=?, username=?, last_seen=?, visits=visits+1
+            WHERE user_id=?
+        """, (
+            user.first_name or "",
+            user.last_name or "",
+            user.username or "",
+            stamp,
+            user.id,
+        ))
+    else:
+        conn.execute("""
+            INSERT INTO users
+            (user_id,first_name,last_name,username,joined_at,last_seen,visits)
+            VALUES(?,?,?,?,?,?,1)
+        """, (
+            user.id,
+            user.first_name or "",
+            user.last_name or "",
+            user.username or "",
+            stamp,
+            stamp,
+        ))
+    conn.commit()
+    conn.close()
+
+
+def is_banned(user_id):
+    conn = db()
+    row = conn.execute(
+        "SELECT banned FROM users WHERE user_id=?", (user_id,)
+    ).fetchone()
+    conn.close()
+    return bool(row and row["banned"])
+
+
+def set_banned(user_id, value):
+    conn = db()
+    conn.execute(
+        "UPDATE users SET banned=? WHERE user_id=?",
+        (1 if value else 0, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_notifications(user_id, enabled):
+    conn = db()
+    conn.execute(
+        "UPDATE users SET notifications=? WHERE user_id=?",
+        (1 if enabled else 0, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+# ============================================================
+# BUTTON / CONTENT HELPERS
+# ============================================================
+
+def get_button(button_id):
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM buttons WHERE id=?", (button_id,)
+    ).fetchone()
+    conn.close()
     return row
 
 
-def save_state(
-    user_id: int,
-    menu_id=None,
-    editor_menu_id=None,
-    selected_button_id=None,
-    state="",
-    temp_text="",
-    temp_id=None,
-):
-    old = get_state(user_id)
-    vals = {
-        "menu_id": old["menu_id"] if old and menu_id is None else menu_id,
-        "editor_menu_id": (
-            old["editor_menu_id"] if old and editor_menu_id is None
-            else editor_menu_id
-        ),
-        "selected_button_id": (
-            old["selected_button_id"]
-            if old and selected_button_id is None
-            else selected_button_id
-        ),
-        "state": state,
-        "temp_text": temp_text,
-        "temp_id": temp_id,
-    }
-    with db() as c:
-        c.execute(
-            """INSERT INTO user_state(
-                 user_id,menu_id,editor_menu_id,selected_button_id,
-                 state,temp_text,temp_id,updated_at
-               ) VALUES(?,?,?,?,?,?,?,?)
-               ON CONFLICT(user_id) DO UPDATE SET
-                 menu_id=excluded.menu_id,
-                 editor_menu_id=excluded.editor_menu_id,
-                 selected_button_id=excluded.selected_button_id,
-                 state=excluded.state,
-                 temp_text=excluded.temp_text,
-                 temp_id=excluded.temp_id,
-                 updated_at=excluded.updated_at""",
-            (
-                user_id,
-                vals["menu_id"],
-                vals["editor_menu_id"],
-                vals["selected_button_id"],
-                vals["state"],
-                vals["temp_text"],
-                vals["temp_id"],
-                int(time.time()),
-            ),
-        )
-
-
-def get_buttons(parent_id=None, admin=False):
-    with db() as c:
-        if parent_id is None:
-            rows = c.execute(
-                """SELECT * FROM buttons
-                   WHERE parent_id IS NULL
-                   AND (hidden=0 OR ?=1)
-                   ORDER BY sort_order,id""",
-                (1 if admin else 0,),
-            ).fetchall()
-        else:
-            rows = c.execute(
-                """SELECT * FROM buttons
-                   WHERE parent_id=?
-                   AND (hidden=0 OR ?=1)
-                   ORDER BY sort_order,id""",
-                (parent_id, 1 if admin else 0),
-            ).fetchall()
+def get_buttons(parent_id=None, enabled_only=True):
+    conn = db()
+    if enabled_only:
+        rows = conn.execute("""
+            SELECT * FROM buttons
+            WHERE parent_id IS ? AND enabled=1
+            ORDER BY position,id
+        """, (parent_id,)).fetchall()
+    else:
+        rows = conn.execute("""
+            SELECT * FROM buttons
+            WHERE parent_id IS ?
+            ORDER BY position,id
+        """, (parent_id,)).fetchall()
+    conn.close()
     return rows
 
 
-def get_button(button_id: int):
-    with db() as c:
-        return c.execute(
-            "SELECT * FROM buttons WHERE id=?", (button_id,)
-        ).fetchone()
+def all_buttons():
+    conn = db()
+    rows = conn.execute(
+        "SELECT * FROM buttons ORDER BY parent_id,position,id"
+    ).fetchall()
+    conn.close()
+    return rows
 
 
-def get_children_count(button_id: int):
-    with db() as c:
-        return c.execute(
-            "SELECT COUNT(*) AS n FROM buttons WHERE parent_id=?",
-            (button_id,),
-        ).fetchone()["n"]
+def next_position(parent_id):
+    conn = db()
+    value = conn.execute(
+        "SELECT COALESCE(MAX(position),-1)+1 AS p FROM buttons WHERE parent_id IS ?",
+        (parent_id,),
+    ).fetchone()["p"]
+    conn.close()
+    return value
 
 
-def get_post(button_id: int):
-    with db() as c:
-        return c.execute(
-            "SELECT * FROM posts WHERE button_id=?", (button_id,)
-        ).fetchone()
+def add_button(title, parent_id, action_type="menu", action_value=""):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO buttons
+        (parent_id,title,action_type,action_value,position,enabled,created_at)
+        VALUES(?,?,?,?,?,1,?)
+    """, (
+        parent_id, title, action_type, action_value,
+        next_position(parent_id), now()
+    ))
+    bid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return bid
 
 
-def create_button(parent_id, title, kind="menu", target=None):
-    with db() as c:
-        n = c.execute(
-            "SELECT COALESCE(MAX(sort_order),-1)+1 AS n FROM buttons "
-            "WHERE parent_id IS ?",
-            (parent_id,),
-        ).fetchone()["n"]
-        cur = c.execute(
-            """INSERT INTO buttons(parent_id,title,kind,target,sort_order)
-               VALUES(?,?,?,?,?)""",
-            (parent_id, title, kind, target, n),
-        )
-        return cur.lastrowid
-
-
-def delete_button(button_id: int):
-    with db() as c:
-        child_ids = [
-            r["id"] for r in c.execute(
-                "SELECT id FROM buttons WHERE parent_id=?", (button_id,)
-            ).fetchall()
-        ]
-        for cid in child_ids:
-            delete_button_tx(c, cid)
-        delete_button_tx(c, button_id)
-
-
-def delete_button_tx(c, button_id):
-    c.execute("DELETE FROM posts WHERE button_id=?", (button_id,))
-    c.execute("DELETE FROM ratings WHERE button_id=?", (button_id,))
-    c.execute("DELETE FROM buttons WHERE id=?", (button_id,))
-
-
-def rename_button(button_id: int, title: str):
-    with db() as c:
-        c.execute(
-            "UPDATE buttons SET title=? WHERE id=?", (title, button_id)
-        )
-
-
-def set_admin_only(button_id: int, value: bool):
-    with db() as c:
-        c.execute(
-            "UPDATE buttons SET admin_only=? WHERE id=?",
-            (1 if value else 0, button_id),
-        )
-
-
-def set_hidden(button_id: int, value: bool):
-    with db() as c:
-        c.execute(
-            "UPDATE buttons SET hidden=? WHERE id=?",
-            (1 if value else 0, button_id),
-        )
-
-
-def move_button(button_id: int, direction: int):
-    b = get_button(button_id)
-    if not b:
+def update_button(button_id, **fields):
+    allowed = {
+        "title", "parent_id", "action_type",
+        "action_value", "position", "enabled"
+    }
+    clean = {k: v for k, v in fields.items() if k in allowed}
+    if not clean:
         return
-    siblings = get_buttons(b["parent_id"], admin=True)
-    idx = next((i for i, x in enumerate(siblings) if x["id"] == button_id), None)
-    if idx is None:
-        return
-    other_idx = idx + direction
-    if other_idx < 0 or other_idx >= len(siblings):
-        return
-    a = siblings[idx]
-    other = siblings[other_idx]
-    with db() as c:
-        c.execute(
-            "UPDATE buttons SET sort_order=? WHERE id=?",
-            (other["sort_order"], a["id"]),
-        )
-        c.execute(
-            "UPDATE buttons SET sort_order=? WHERE id=?",
-            (a["sort_order"], other["id"]),
-        )
+    sql = ", ".join(f"{k}=?" for k in clean)
+    values = list(clean.values()) + [button_id]
+    conn = db()
+    conn.execute(f"UPDATE buttons SET {sql} WHERE id=?", values)
+    conn.commit()
+    conn.close()
 
 
-def save_post(button_id, text=None, media_type=None, file_id=None):
-    with db() as c:
-        c.execute(
-            """INSERT INTO posts(button_id,text,media_type,file_id,updated_at)
-               VALUES(?,?,?,?,?)
-               ON CONFLICT(button_id) DO UPDATE SET
-                 text=excluded.text,
-                 media_type=excluded.media_type,
-                 file_id=excluded.file_id,
-                 updated_at=excluded.updated_at""",
-            (button_id, text, media_type, file_id, int(time.time())),
-        )
+def descendants(button_id):
+    found = set()
+    queue = [button_id]
+    while queue:
+        current = queue.pop()
+        for row in get_buttons(current, enabled_only=False):
+            if row["id"] not in found:
+                found.add(row["id"])
+                queue.append(row["id"])
+    return found
 
 
-# ---------------------------------------------------------------------------
-# UI helpers
-# ---------------------------------------------------------------------------
-
-def is_admin(user_id: int) -> bool:
-    try:
-        return int(user_id) == ADMIN_ID
-    except Exception:
-        return False
-
-
-def kb(rows: List[List[str]]) -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        [[KeyboardButton(x) for x in row] for row in rows],
-        resize_keyboard=True,
-        is_persistent=True,
-    )
-
-
-def main_keyboard(user_id: int):
-    admin = is_admin(user_id)
-    rows = []
-    buttons = get_buttons(None, admin=admin)
-    for i in range(0, len(buttons), 2):
-        pair = [b["title"] for b in buttons[i:i+2]]
-        rows.append(pair)
-    if admin:
-        rows.append(["👑 لوحة الأدمن"])
-    return kb(rows or [["🏠 القائمة الرئيسية"]])
-
-
-def editor_keyboard(menu_id, user_id):
-    buttons = get_buttons(menu_id, admin=True)
-    rows = []
-    for i in range(0, len(buttons), 2):
-        row = []
-        for b in buttons[i:i+2]:
-            title = b["title"]
-            state = get_state(user_id)
-            selected = state and state["selected_button_id"] == b["id"]
-            row.append(f"[ {title} ]" if selected else title)
-        rows.append(row)
-    rows.extend([
-        ["➕ إضافة زر", "↕️ ترتيب الأزرار"],
-        ["✏️ تعديل المحدد", "📝 محتوى المحدد"],
-        ["🗑 حذف المحدد", "🔒 صلاحيات المحدد"],
-        ["👁️ معاينة", "⚙️ إعدادات البوت"],
-        ["🏠 الرئيسية", "⏹️ إيقاف المحرر"],
-    ])
-    return kb(rows)
-
-
-def admin_keyboard():
-    return kb([
-        ["🎛 محرر الأزرار", "📝 محرر المحتوى"],
-        ["📢 إعلان", "📣 رسالة جماعية"],
-        ["🔔 الإشعارات", "💬 المراسلات"],
-        ["👥 المستخدمون", "📊 الإحصائيات"],
-        ["⭐ التقييمات", "⚙️ إعدادات البوت"],
-        ["👁️ معاينة", "🏠 الرئيسية"],
-    ])
-
-
-def confirm_keyboard(ok: str, cancel: str = "❌ إلغاء"):
-    return kb([[ok, cancel]])
-
-
-def subscribe_keyboard():
-    rows = []
-    if get_required_channel():
-        rows.append([KeyboardButton(get_setting("subscribe_button"))])
-    rows.append([KeyboardButton(get_setting("verify_button"))])
-    return kb(rows)
-
-
-def parse_selected_id(user_id: int) -> Optional[int]:
-    st = get_state(user_id)
-    return st["selected_button_id"] if st else None
-
-
-async def safe_delete(message):
-    if not message:
-        return
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-
-async def clean_previous(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    old = context.user_data.get("last_bot_message_id")
-    if old:
-        try:
-            await context.bot.delete_message(update.effective_chat.id, old)
-        except Exception:
-            pass
-    context.user_data["last_bot_message_id"] = None
-
-
-async def send_clean(update: Update, context, text, reply_markup=None, **kwargs):
-    await clean_previous(update, context)
-    msg = await update.effective_message.reply_text(
-        text, reply_markup=reply_markup, **kwargs
-    )
-    context.user_data["last_bot_message_id"] = msg.message_id
-    return msg
-
-
-# ---------------------------------------------------------------------------
-# Subscription gate
-# ---------------------------------------------------------------------------
-
-async def subscribed(user_id: int, bot) -> bool:
-    if is_admin(user_id):
-        return True
-    channel = get_required_channel()
-    if not channel:
-        return False
-    try:
-        member = await bot.get_chat_member(channel, user_id)
-        return member.status in {
-            ChatMemberStatus.MEMBER,
-            ChatMemberStatus.ADMINISTRATOR,
-            ChatMemberStatus.OWNER,
-        }
-    except Exception as exc:
-        log.warning("Subscription check failed: %s", exc)
-        return False
-
-
-async def require_subscription(update: Update, context) -> bool:
-    user = update.effective_user
-    if not user:
-        return False
-    if is_admin(user.id):
-        return True
-    if await subscribed(user.id, context.bot):
-        return True
-
-    text = get_setting("subscribe_text")
-    await send_clean(
-        update,
-        context,
-        text,
-        reply_markup=subscribe_keyboard(),
-    )
-    return False
-
-
-# ---------------------------------------------------------------------------
-# Rendering menus and posts
-# ---------------------------------------------------------------------------
-
-async def show_home(update, context, edit_state=True):
-    user = update.effective_user
-    if edit_state:
-        save_state(user.id, menu_id=None, state="")
-    text = get_setting("welcome_text")
-    if is_admin(user.id):
-        text += "\n\n👑 وضع الأدمن متاح لك."
-    await send_clean(
-        update,
-        context,
-        text,
-        reply_markup=main_keyboard(user.id),
-    )
-
-
-async def show_menu(update, context, button_id: int):
-    user = update.effective_user
-    b = get_button(button_id)
-    if not b:
-        await show_home(update, context)
-        return
-
-    if b["admin_only"] and not is_admin(user.id):
-        return
-
-    if b["kind"] == "favorites":
-        await show_favorites(update, context)
-        return
-    if b["kind"] == "contact":
-        await send_clean(
-            update,
-            context,
-            "💬 للتواصل معنا أرسل رسالتك هنا وسيتم تحويلها للإدارة.",
-            reply_markup=kb([["🏠 الرئيسية"]]),
-        )
-        save_state(user.id, menu_id=button_id, state="contact")
-        return
-
-    children = get_buttons(button_id, admin=is_admin(user.id))
-    post = get_post(button_id)
-
-    if post:
-        await render_post(update, context, button_id, post)
-        return
-
-    save_state(user.id, menu_id=button_id, state="")
-    rows = []
-    for i in range(0, len(children), 2):
-        rows.append([x["title"] for x in children[i:i+2]])
-    rows.append(["↩️ رجوع", "🏠 الرئيسية"])
-
-    title = b["title"]
-    text = f"📂 {title}\n\nاختر من القائمة:"
-    await send_clean(update, context, text, reply_markup=kb(rows))
-
-
-async def render_post(update, context, button_id, post):
-    user = update.effective_user
-    save_state(user.id, menu_id=button_id, state="")
-    text = post["text"] or ""
-    if post["media_type"] == "photo" and post["file_id"]:
-        await clean_previous(update, context)
-        msg = await update.effective_message.reply_photo(
-            post["file_id"],
-            caption=text[:1024],
-            reply_markup=kb([["↩️ رجوع", "🏠 الرئيسية"], ["⭐ تقييم"]]),
-        )
-        context.user_data["last_bot_message_id"] = msg.message_id
-        return
-    if post["media_type"] == "document" and post["file_id"]:
-        await clean_previous(update, context)
-        msg = await update.effective_message.reply_document(
-            post["file_id"],
-            caption=text[:1024],
-            reply_markup=kb([["↩️ رجوع", "🏠 الرئيسية"], ["⭐ تقييم"]]),
-        )
-        context.user_data["last_bot_message_id"] = msg.message_id
-        return
-    if post["media_type"] == "video" and post["file_id"]:
-        await clean_previous(update, context)
-        msg = await update.effective_message.reply_video(
-            post["file_id"],
-            caption=text[:1024],
-            reply_markup=kb([["↩️ رجوع", "🏠 الرئيسية"], ["⭐ تقييم"]]),
-        )
-        context.user_data["last_bot_message_id"] = msg.message_id
-        return
-    if post["media_type"] == "audio" and post["file_id"]:
-        await clean_previous(update, context)
-        msg = await update.effective_message.reply_audio(
-            post["file_id"],
-            caption=text[:1024],
-            reply_markup=kb([["↩️ رجوع", "🏠 الرئيسية"], ["⭐ تقييم"]]),
-        )
-        context.user_data["last_bot_message_id"] = msg.message_id
-        return
-
-    await send_clean(
-        update,
-        context,
-        text or "📭 لا يوجد محتوى حالياً.",
-        reply_markup=kb([["↩️ رجوع", "🏠 الرئيسية"], ["⭐ تقييم"]]),
-    )
-
-
-async def show_favorites(update, context):
-    with db() as c:
-        rows = c.execute(
-            """SELECT DISTINCT b.* FROM ratings r
-               JOIN buttons b ON b.id=r.button_id
-               WHERE r.user_id=? AND r.rating>=4
-               ORDER BY r.created_at DESC""",
-            (update.effective_user.id,),
+def delete_button_tree(button_id):
+    conn = db()
+    ids = [button_id]
+    queue = [button_id]
+    while queue:
+        current = queue.pop()
+        children = conn.execute(
+            "SELECT id FROM buttons WHERE parent_id=?", (current,)
         ).fetchall()
-    if not rows:
-        text = "⭐ لا توجد مفضلات حتى الآن."
-        buttons = [["🏠 الرئيسية"]]
-    else:
-        text = "⭐ المفضلة"
-        buttons = [[r["title"]] for r in rows] + [["🏠 الرئيسية"]]
-    await send_clean(update, context, text, reply_markup=kb(buttons))
+        for child in children:
+            ids.append(child["id"])
+            queue.append(child["id"])
+
+    marks = ",".join("?" for _ in ids)
+    conn.execute(f"DELETE FROM buttons WHERE id IN ({marks})", ids)
+    conn.commit()
+    conn.close()
 
 
-# ---------------------------------------------------------------------------
-# Admin editor
-# ---------------------------------------------------------------------------
-
-async def open_editor(update, context, menu_id=None):
-    user = update.effective_user
-    if not is_admin(user.id):
-        return
-    if menu_id is None:
-        st = get_state(user.id)
-        menu_id = st["editor_menu_id"] if st else None
-    save_state(
-        user.id,
-        editor_menu_id=menu_id,
-        selected_button_id=None,
-        state="editor",
-    )
-    title = "🎛 محرر الأزرار"
-    if menu_id:
-        b = get_button(menu_id)
-        title += f"\n📂 داخل: {b['title'] if b else 'قسم'}"
-    else:
-        title += "\n🏠 الرئيسية"
-    await send_clean(
-        update,
-        context,
-        title + "\n\nاضغط زر مرة واحدة لتحديده، واضغطه مرة ثانية للدخول للقسم.",
-        reply_markup=editor_keyboard(menu_id, user.id),
-    )
-
-
-async def editor_button_click(update, context, title: str):
-    user = update.effective_user
-    st = get_state(user.id)
-    if not st or st["state"] != "editor":
+def move_button(button_id, new_parent):
+    if button_id == new_parent:
         return False
-    buttons = get_buttons(st["editor_menu_id"], admin=True)
-    match = next((b for b in buttons if b["title"] == title or f"[ {b['title']} ]" == title), None)
-    if not match:
+    if new_parent is not None and new_parent in descendants(button_id):
         return False
-
-    selected = st["selected_button_id"]
-    if selected == match["id"]:
-        # Second press: enter submenu if it has children.
-        if get_children_count(match["id"]) > 0 or match["kind"] == "menu":
-            await open_editor(update, context, match["id"])
-            return True
-
-    save_state(
-        user.id,
-        editor_menu_id=st["editor_menu_id"],
-        selected_button_id=match["id"],
-        state="editor",
+    update_button(
+        button_id,
+        parent_id=new_parent,
+        position=next_position(new_parent),
     )
-    await open_editor(update, context, st["editor_menu_id"])
     return True
 
 
-async def add_button_start(update, context):
-    save_state(update.effective_user.id, state="await_add_title")
-    await send_clean(
-        update, context,
-        "➕ **إضافة زر**\n\nأرسل اسم الزر الجديد:",
-        reply_markup=kb([["❌ إلغاء"]]),
+def add_content(button_id, message, title=""):
+    ctype = detect_content_type(message)
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO contents
+        (button_id,source_chat_id,source_message_id,content_type,title,published,created_at)
+        VALUES(?,?,?,?,?,?,?)
+    """, (
+        button_id,
+        message.chat_id,
+        message.message_id,
+        ctype,
+        title or default_title(message, ctype),
+        1,
+        now(),
+    ))
+    cid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return cid
+
+
+def get_contents(button_id, published_only=True):
+    conn = db()
+    if published_only:
+        rows = conn.execute("""
+            SELECT * FROM contents
+            WHERE button_id=? AND published=1
+            ORDER BY id
+        """, (button_id,)).fetchall()
+    else:
+        rows = conn.execute("""
+            SELECT * FROM contents WHERE button_id=? ORDER BY id
+        """, (button_id,)).fetchall()
+    conn.close()
+    return rows
+
+
+def get_content(content_id):
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM contents WHERE id=?", (content_id,)
+    ).fetchone()
+    conn.close()
+    return row
+
+
+def delete_content(content_id):
+    conn = db()
+    conn.execute("DELETE FROM contents WHERE id=?", (content_id,))
+    conn.commit()
+    conn.close()
+
+
+def toggle_favorite(user_id, button_id):
+    conn = db()
+    exists = conn.execute("""
+        SELECT 1 FROM favorites WHERE user_id=? AND button_id=?
+    """, (user_id, button_id)).fetchone()
+
+    if exists:
+        conn.execute(
+            "DELETE FROM favorites WHERE user_id=? AND button_id=?",
+            (user_id, button_id),
+        )
+        result = False
+    else:
+        conn.execute(
+            "INSERT INTO favorites(user_id,button_id) VALUES(?,?)",
+            (user_id, button_id),
+        )
+        result = True
+
+    conn.commit()
+    conn.close()
+    return result
+
+
+def is_favorite(user_id, button_id):
+    conn = db()
+    row = conn.execute("""
+        SELECT 1 FROM favorites WHERE user_id=? AND button_id=?
+    """, (user_id, button_id)).fetchone()
+    conn.close()
+    return bool(row)
+
+
+def detect_content_type(message):
+    if message.document:
+        return "document"
+    if message.photo:
+        return "photo"
+    if message.video:
+        return "video"
+    if message.audio:
+        return "audio"
+    if message.voice:
+        return "voice"
+    if message.animation:
+        return "animation"
+    if message.text:
+        return "text"
+    return "message"
+
+
+def default_title(message, ctype):
+    if message.text:
+        text = message.text.strip().replace("\n", " ")
+        return text[:80] or "محتوى نصي"
+    return {
+        "document": "📄 ملف",
+        "photo": "🖼 صورة",
+        "video": "🎥 فيديو",
+        "audio": "🎵 صوت",
+        "voice": "🎙 رسالة صوتية",
+        "animation": "🎞 GIF",
+    }.get(ctype, "📦 محتوى")
+
+
+# ============================================================
+# SUBSCRIPTION
+# ============================================================
+
+async def subscription_required(user_id):
+    if not REQUIRED_CHANNEL:
+        return False
+    try:
+        member = await telegram_app.bot.get_chat_member(
+            REQUIRED_CHANNEL, user_id
+        )
+        return member.status in ("creator", "administrator", "member")
+    except Exception as exc:
+        logger.warning("Subscription check failed: %s", exc)
+        # Fail closed for configured mandatory channel.
+        return True
+
+
+async def send_subscription_gate(update):
+    buttons = []
+    if REQUIRED_CHANNEL_URL:
+        buttons.append([
+            InlineKeyboardButton(
+                "📢 الاشتراك بالقناة",
+                url=REQUIRED_CHANNEL_URL
+            )
+        ])
+    buttons.append([
+        InlineKeyboardButton("✅ تحقق من الاشتراك", callback_data="SUB:CHECK")
+    ])
+    await update.effective_message.reply_text(
+        get_setting("subscription_text"),
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons),
     )
 
 
-async def edit_selected_start(update, context):
-    bid = parse_selected_id(update.effective_user.id)
-    if not bid:
-        await send_clean(update, context, "⚠️ حدد زر أولاً.", reply_markup=editor_keyboard(
-            get_state(update.effective_user.id)["editor_menu_id"], update.effective_user.id))
-        return
-    b = get_button(bid)
-    save_state(update.effective_user.id, state="await_rename", temp_id=bid)
-    await send_clean(
-        update, context,
-        f"✏️ **تعديل الزر**\n\nالاسم الحالي:\n{b['title']}\n\nأرسل الاسم الجديد:",
-        reply_markup=kb([["❌ إلغاء"]]),
+# ============================================================
+# KEYBOARDS
+# ============================================================
+
+def reply_kb(rows):
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
+
+
+def home_keyboard():
+    rows = []
+    for b in get_buttons(None):
+        rows.append([KeyboardButton(b["title"])])
+    return reply_kb(rows)
+
+
+def admin_keyboard():
+    return reply_kb([
+        ["⚙️ إعدادات البوت", "🎛 محرر الأزرار"],
+        ["📝 محرر المحتوى", "📢 الإعلان"],
+        ["📣 رسالة جماعية", "🔔 الإشعارات"],
+        ["💬 المراسلات", "⭐ التقييمات"],
+        ["👥 المستخدمون", "📊 الإحصائيات"],
+        ["🛠 الصيانة", "👁 المعاينة"],
+        ["🏠 واجهة المستخدم"],
+    ])
+
+
+def cancel_keyboard():
+    return reply_kb([["❌ إلغاء"]])
+
+
+def admin_button_selector(prefix="BTN"):
+    rows = []
+    for b in all_buttons():
+        rows.append([
+            KeyboardButton(f"{b['title']} 〔{b['id']}〕")
+        ])
+    rows.append([KeyboardButton("🏠 الرئيسية")])
+    rows.append([KeyboardButton("❌ إلغاء")])
+    return reply_kb(rows)
+
+
+def parse_id_from_button_text(text):
+    if "〔" not in text or "〕" not in text:
+        return None
+    try:
+        return int(text.rsplit("〔", 1)[1].split("〕", 1)[0])
+    except (ValueError, IndexError):
+        return None
+
+
+# ============================================================
+# HOME / USER CONTENT
+# ============================================================
+
+async def show_home(update):
+    await update.effective_message.reply_text(
+        get_setting("home_text"),
+        parse_mode=ParseMode.HTML,
+        reply_markup=home_keyboard(),
     )
 
 
-async def edit_content_start(update, context):
-    bid = parse_selected_id(update.effective_user.id)
-    if not bid:
-        await send_clean(update, context, "⚠️ حدد زر أولاً.")
+async def show_button(update, button_id):
+    button = get_button(button_id)
+    if not button or not button["enabled"]:
+        await update.effective_message.reply_text("❌ هذا الزر غير متاح.")
         return
-    b = get_button(bid)
-    save_state(update.effective_user.id, state="await_content", temp_id=bid)
-    await send_clean(
-        update, context,
-        f"📝 **محرر المحتوى**\n\nالزر: {b['title']}\n\n"
-        "أرسل النص أو PDF أو صورة أو فيديو أو ملف صوتي.\n"
-        "سيتم استبدال المحتوى السابق بعد التأكيد.",
-        reply_markup=kb([["❌ إلغاء"]]),
+
+    user_id = update.effective_user.id
+
+    if await subscription_required(user_id):
+        await send_subscription_gate(update)
+        return
+
+    conn = db()
+    conn.execute(
+        "INSERT INTO visits(user_id,button_id,created_at) VALUES(?,?,?)",
+        (user_id, button_id, now()),
+    )
+    conn.commit()
+    conn.close()
+
+    action = button["action_type"]
+
+    if action == "search":
+        context = update._context
+        context.user_data["state"] = "USER_SEARCH"
+        await update.effective_message.reply_text(
+            "🔎 أرسل كلمة البحث:",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if action == "favorites":
+        await show_favorites(update)
+        return
+
+    if action == "notifications":
+        await show_notification_settings(update)
+        return
+
+    if action == "rating":
+        await start_rating(update)
+        return
+
+    if action == "contact":
+        update._context.user_data["state"] = "USER_CONTACT"
+        await update.effective_message.reply_text(
+            "💬 أرسل رسالتك للإدارة:",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if action == "about":
+        await update.effective_message.reply_text(
+            get_setting("about_text"),
+            parse_mode=ParseMode.HTML,
+            reply_markup=home_keyboard(),
+        )
+        return
+
+    if action == "url" and button["action_value"]:
+        await update.effective_message.reply_text(
+            f"🔗 {html.escape(button['action_value'])}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=home_keyboard(),
+        )
+        return
+
+    if action == "content":
+        for c in get_contents(button_id):
+            try:
+                await telegram_app.bot.copy_message(
+                    chat_id=update.effective_chat.id,
+                    from_chat_id=c["source_chat_id"],
+                    message_id=c["source_message_id"],
+                )
+            except Exception:
+                logger.exception("copy content failed")
+        await section_actions(update, button_id)
+        return
+
+    # Default menu action.
+    children = get_buttons(button_id)
+    contents = get_contents(button_id)
+
+    rows = [[KeyboardButton(child["title"])] for child in children]
+
+    for c in contents:
+        rows.append([
+            KeyboardButton(f"📄 {c['title'][:60]} 〔C{c['id']}〕")
+        ])
+
+    fav = is_favorite(user_id, button_id)
+    rows.append([
+        KeyboardButton("💔 إزالة من المفضلة" if fav else "⭐ إضافة للمفضلة")
+    ])
+    rows.append([KeyboardButton("⬅️ رجوع"), KeyboardButton("🏠 الرئيسية")])
+
+    await update.effective_message.reply_text(
+        f"📚 <b>{html.escape(button['title'])}</b>\n\nاختر:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=reply_kb(rows),
     )
 
 
-async def delete_selected_start(update, context):
-    bid = parse_selected_id(update.effective_user.id)
-    if not bid:
-        await send_clean(update, context, "⚠️ حدد زر أولاً.")
-        return
-    b = get_button(bid)
-    save_state(update.effective_user.id, state="confirm_delete", temp_id=bid)
-    await send_clean(
-        update, context,
-        f"🗑️ **تأكيد الحذف**\n\nالزر: **{b['title']}**\n\n"
-        "⚠️ سيتم حذف الزر ومحتواه والأقسام الموجودة داخله.\n"
-        "هل أنت متأكد؟",
-        reply_markup=confirm_keyboard("✅ نعم، احذف", "❌ إلغاء"),
-    )
-
-
-async def move_menu(update, context):
-    bid = parse_selected_id(update.effective_user.id)
-    if not bid:
-        await send_clean(update, context, "⚠️ حدد زر أولاً.")
-        return
-    save_state(update.effective_user.id, state="move")
-    await send_clean(
-        update, context,
-        "↕️ **ترتيب الزر**\n\nاختر الاتجاه:",
-        reply_markup=kb([
-            ["⬆️ للأعلى", "⬇️ للأسفل"],
-            ["↩️ إلغاء"],
+async def section_actions(update, button_id):
+    fav = is_favorite(update.effective_user.id, button_id)
+    await update.effective_message.reply_text(
+        "✨ ماذا تريد أن تفعل؟",
+        reply_markup=reply_kb([
+            ["💔 إزالة من المفضلة" if fav else "⭐ إضافة للمفضلة"],
+            ["⭐ تقييم المحتوى"],
+            ["⬅️ رجوع", "🏠 الرئيسية"],
         ]),
     )
 
 
-async def permission_menu(update, context):
-    bid = parse_selected_id(update.effective_user.id)
-    if not bid:
-        await send_clean(update, context, "⚠️ حدد زر أولاً.")
+async def show_favorites(update):
+    conn = db()
+    rows = conn.execute("""
+        SELECT b.* FROM favorites f
+        JOIN buttons b ON b.id=f.button_id
+        WHERE f.user_id=? AND b.enabled=1
+        ORDER BY b.position,b.id
+    """, (update.effective_user.id,)).fetchall()
+    conn.close()
+
+    if not rows:
+        await update.effective_message.reply_text(
+            "⭐ لا توجد عناصر في المفضلة بعد.",
+            reply_markup=home_keyboard(),
+        )
         return
-    b = get_button(bid)
-    save_state(update.effective_user.id, state="permissions", temp_id=bid)
-    status = "مفعل 🔒" if b["admin_only"] else "مفتوح 👥"
-    await send_clean(
-        update, context,
-        f"🔒 **صلاحيات الزر**\n\n{b['title']}\nالحالة: {status}",
-        reply_markup=kb([
-            ["🔒 للأدمن فقط", "👥 للجميع"],
-            ["👻 إخفاء/إظهار"],
-            ["↩️ إلغاء"],
+
+    await update.effective_message.reply_text(
+        "⭐ <b>المفضلة</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=reply_kb(
+            [[KeyboardButton(r["title"])] for r in rows] +
+            [["🏠 الرئيسية"]]
+        ),
+    )
+
+
+async def show_notification_settings(update):
+    conn = db()
+    row = conn.execute(
+        "SELECT notifications FROM users WHERE user_id=?",
+        (update.effective_user.id,),
+    ).fetchone()
+    conn.close()
+    enabled = bool(row and row["notifications"])
+
+    await update.effective_message.reply_text(
+        get_setting("notifications_text"),
+        reply_markup=reply_kb([
+            ["🔕 إيقاف الإشعارات" if enabled else "🔔 تفعيل الإشعارات"],
+            ["🏠 الرئيسية"],
         ]),
     )
 
 
-async def preview_selected(update, context):
-    bid = parse_selected_id(update.effective_user.id)
-    if not bid:
-        await send_clean(update, context, "⚠️ حدد زر أولاً.")
-        return
-    b = get_button(bid)
-    await send_clean(
-        update, context,
-        f"👁️ **معاينة**\n\n{b['title']}\n\nهذه هي الواجهة كما يراها المستخدم.",
-        reply_markup=main_keyboard(update.effective_user.id),
-    )
-
-
-async def bot_settings(update, context):
-    if not is_admin(update.effective_user.id):
-        return
-    maintenance = get_setting("maintenance") == "1"
-    await send_clean(
-        update, context,
-        "⚙️ **إعدادات البوت**",
-        reply_markup=kb([
-            [f"🛠 الصيانة: {'ON 🟢' if maintenance else 'OFF 🔴'}"],
-            ["🏷️ تعديل اسم الرئيسية", "📝 تعديل رسالة الترحيب"],
-            ["🔐 إعداد قناة الاشتراك", "📩 رسائل النظام"],
-            ["↩️ رجوع للأدمن"],
+async def start_rating(update):
+    update._context.user_data["state"] = "USER_RATING"
+    await update.effective_message.reply_text(
+        "⭐ اختر تقييمك من 1 إلى 5:",
+        reply_markup=reply_kb([
+            ["⭐ 1", "⭐⭐ 2"],
+            ["⭐⭐⭐ 3"],
+            ["⭐⭐⭐⭐ 4", "⭐⭐⭐⭐⭐ 5"],
+            ["❌ إلغاء"],
         ]),
     )
 
 
-# ---------------------------------------------------------------------------
-# Admin broadcasts, notifications, stats, ratings
-# ---------------------------------------------------------------------------
+# ============================================================
+# ADMIN PANEL
+# ============================================================
 
-async def broadcast_start(update, context, notification_only=False):
-    if not is_admin(update.effective_user.id):
-        return
-    save_state(
-        update.effective_user.id,
-        state="await_broadcast",
-        temp_text="notifications" if notification_only else "all",
-    )
-    target = "المستخدمين المفعّلين للإشعارات" if notification_only else "جميع المستخدمين"
-    await send_clean(
-        update, context,
-        f"📣 **رسالة جماعية**\n\nالهدف: {target}\n\nأرسل الرسالة الآن.",
-        reply_markup=kb([["❌ إلغاء"]]),
-    )
+def admin_only(func):
+    @wraps(func)
+    async def wrapper(update, context, *args, **kwargs):
+        if update.effective_user.id != ADMIN_ID:
+            await update.effective_message.reply_text("⛔ غير مسموح.")
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapper
 
 
-async def stats(update, context):
-    with db() as c:
-        users = c.execute("SELECT COUNT(*) n FROM users").fetchone()["n"]
-        buttons = c.execute("SELECT COUNT(*) n FROM buttons").fetchone()["n"]
-        posts = c.execute("SELECT COUNT(*) n FROM posts").fetchone()["n"]
-        ratings = c.execute("SELECT COUNT(*) n FROM ratings").fetchone()["n"]
-    await send_clean(
-        update, context,
-        f"📊 **الإحصائيات**\n\n"
-        f"👥 المستخدمون: {users}\n"
-        f"🎛 الأزرار: {buttons}\n"
-        f"📝 المحتويات: {posts}\n"
-        f"⭐ التقييمات: {ratings}",
+async def show_admin(update):
+    await update.effective_message.reply_text(
+        "👑 <b>لوحة الإدارة</b>\n\n"
+        "🎛 من هنا تتحكم بكل واجهة البوت ومحتواه وإعداداته.",
+        parse_mode=ParseMode.HTML,
         reply_markup=admin_keyboard(),
     )
 
 
-async def ratings_report(update, context):
-    with db() as c:
-        rows = c.execute(
-            """SELECT rating, COUNT(*) n FROM ratings
-               GROUP BY rating ORDER BY rating"""
-        ).fetchall()
-    lines = ["⭐ **التقييمات**", ""]
-    for r in rows:
-        lines.append(f"{r['rating']} ⭐ : {r['n']}")
-    await send_clean(update, context, "\n".join(lines), reply_markup=admin_keyboard())
+async def admin_settings(update, context):
+    context.user_data["state"] = "ADMIN_SETTINGS"
+    await update.effective_message.reply_text(
+        "⚙️ <b>إعدادات البوت</b>\n\n"
+        "اختر ما تريد تغييره:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=reply_kb([
+            ["✏️ اسم البوت", "🏠 اسم الرئيسية"],
+            ["📝 نص الرئيسية", "ℹ️ نص حول البوت"],
+            ["🔐 نص الاشتراك", "🛠 نص الصيانة"],
+            ["🔔 نص الإشعارات", "📢 نص الإعلان"],
+            ["⬅️ رجوع"],
+        ]),
+    )
 
 
-# ---------------------------------------------------------------------------
-# Main message router
-# ---------------------------------------------------------------------------
+async def admin_buttons(update, context):
+    context.user_data["state"] = "ADMIN_BUTTONS"
+    await update.effective_message.reply_text(
+        "🎛 <b>محرر الأزرار</b>\n\n"
+        "الإضافة والتعديل والحذف والنقل كلها من هنا.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=reply_kb([
+            ["➕ إضافة زر", "✏️ تعديل زر"],
+            ["🗑 حذف زر", "🔄 نقل زر"],
+            ["📋 عرض الأزرار"],
+            ["⬅️ رجوع"],
+        ]),
+    )
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    upsert_user(update.effective_user)
-    save_state(update.effective_user.id, state="")
-    if not await require_subscription(update, context):
+
+async def admin_content(update, context):
+    context.user_data["state"] = "ADMIN_CONTENT"
+    await update.effective_message.reply_text(
+        "📝 <b>محرر المحتوى</b>\n\n"
+        "أضف أي رسالة/صورة/فيديو/ملف داخل أي زر.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=reply_kb([
+            ["➕ إضافة محتوى", "✏️ تعديل محتوى"],
+            ["🗑 حذف محتوى", "👁 عرض المحتوى"],
+            ["⬅️ رجوع"],
+        ]),
+    )
+
+
+async def admin_preview(update, context):
+    await update.effective_message.reply_text(
+        "👁 <b>نظام المعاينة</b>\n\n"
+        "المعاينة تظهر للمستخدم بنفس أسلوب العرض قبل اعتماد النشر.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_keyboard(),
+    )
+
+
+async def admin_stats(update, context):
+    conn = db()
+    values = {
+        "users": conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"],
+        "buttons": conn.execute("SELECT COUNT(*) c FROM buttons").fetchone()["c"],
+        "contents": conn.execute("SELECT COUNT(*) c FROM contents").fetchone()["c"],
+        "favorites": conn.execute("SELECT COUNT(*) c FROM favorites").fetchone()["c"],
+        "ratings": conn.execute("SELECT COUNT(*) c FROM ratings").fetchone()["c"],
+        "messages": conn.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"],
+    }
+    conn.close()
+
+    await update.effective_message.reply_text(
+        "📊 <b>الإحصائيات</b>\n\n"
+        f"👥 المستخدمون: <b>{values['users']}</b>\n"
+        f"🔘 الأزرار: <b>{values['buttons']}</b>\n"
+        f"📝 المحتوى: <b>{values['contents']}</b>\n"
+        f"⭐ المفضلة: <b>{values['favorites']}</b>\n"
+        f"🌟 التقييمات: <b>{values['ratings']}</b>\n"
+        f"💬 المراسلات: <b>{values['messages']}</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_keyboard(),
+    )
+
+
+# ============================================================
+# BROADCAST / NOTIFICATIONS
+# ============================================================
+
+async def admin_broadcast_start(update, context):
+    context.user_data["state"] = "ADMIN_BROADCAST"
+    await update.effective_message.reply_text(
+        "📣 أرسل الرسالة الآن.\n\n"
+        "تقدر ترسل نص أو صورة أو فيديو أو ملف.\n"
+        "قبل التنفيذ سيظهر لك تأكيد.",
+        reply_markup=cancel_keyboard(),
+    )
+
+
+async def broadcast_preview(update, context):
+    context.user_data["broadcast_chat_id"] = update.effective_chat.id
+    context.user_data["broadcast_message_id"] = update.effective_message.message_id
+    context.user_data["state"] = "ADMIN_BROADCAST_CONFIRM"
+
+    await update.effective_message.reply_text(
+        "👁 تمت المعاينة.\n\n"
+        "⚠️ هل تريد إرسال هذه الرسالة إلى المستخدمين؟",
+        reply_markup=reply_kb([
+            ["✅ تأكيد الإرسال", "❌ إلغاء"],
+        ]),
+    )
+
+
+async def execute_broadcast(update, context):
+    conn = db()
+    users = conn.execute(
+        "SELECT user_id FROM users WHERE banned=0"
+    ).fetchall()
+    conn.close()
+
+    chat_id = context.user_data.get("broadcast_chat_id")
+    message_id = context.user_data.get("broadcast_message_id")
+
+    ok = fail = 0
+    for row in users:
+        try:
+            await telegram_app.bot.copy_message(
+                chat_id=row["user_id"],
+                from_chat_id=chat_id,
+                message_id=message_id,
+            )
+            ok += 1
+        except Exception:
+            fail += 1
+
+    context.user_data.clear()
+    await update.effective_message.reply_text(
+        f"📣 <b>اكتملت الرسالة الجماعية</b>\n\n"
+        f"✅ تم الإرسال: {ok}\n"
+        f"❌ تعذر الإرسال: {fail}",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_keyboard(),
+    )
+
+
+async def send_new_content_notifications(button_id, content_title):
+    conn = db()
+    users = conn.execute(
+        "SELECT user_id FROM users WHERE banned=0 AND notifications=1"
+    ).fetchall()
+    conn.close()
+
+    button = get_button(button_id)
+    if not button:
         return
-    await show_home(update, context)
+
+    for row in users:
+        try:
+            await telegram_app.bot.send_message(
+                row["user_id"],
+                f"🔔 <b>محتوى جديد</b>\n\n"
+                f"📚 {html.escape(button['title'])}\n"
+                f"📄 {html.escape(content_title)}",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
 
 
-async def message_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ============================================================
+# ADMIN BUTTON OPERATIONS
+# ============================================================
+
+async def add_button_start(update, context):
+    context.user_data["state"] = "ADD_BUTTON_TITLE"
+    await update.effective_message.reply_text(
+        "➕ أرسل اسم الزر الجديد:",
+        reply_markup=cancel_keyboard(),
+    )
+
+
+async def edit_button_start(update, context):
+    context.user_data["state"] = "EDIT_BUTTON_SELECT"
+    await update.effective_message.reply_text(
+        "✏️ اختر الزر الذي تريد تعديله:",
+        reply_markup=admin_button_selector(),
+    )
+
+
+async def delete_button_start(update, context):
+    context.user_data["state"] = "DELETE_BUTTON_SELECT"
+    await update.effective_message.reply_text(
+        "🗑 اختر الزر الذي تريد حذفه:",
+        reply_markup=admin_button_selector(),
+    )
+
+
+async def move_button_start(update, context):
+    context.user_data["state"] = "MOVE_BUTTON_SELECT"
+    await update.effective_message.reply_text(
+        "🔄 اختر الزر الذي تريد نقله:",
+        reply_markup=admin_button_selector(),
+    )
+
+
+async def handle_admin_text(update, context, state, text):
+    # Settings editor
+    if state == "ADMIN_SETTINGS":
+        mapping = {
+            "✏️ اسم البوت": "bot_name",
+            "🏠 اسم الرئيسية": "home_title",
+            "📝 نص الرئيسية": "home_text",
+            "ℹ️ نص حول البوت": "about_text",
+            "🔐 نص الاشتراك": "subscription_text",
+            "🛠 نص الصيانة": "maintenance_text",
+            "🔔 نص الإشعارات": "notifications_text",
+            "📢 نص الإعلان": "announcement_text",
+        }
+        if text in mapping:
+            context.user_data["state"] = "SETTING_VALUE"
+            context.user_data["setting_key"] = mapping[text]
+            await update.effective_message.reply_text(
+                "✍️ أرسل القيمة الجديدة:",
+                reply_markup=cancel_keyboard(),
+            )
+            return True
+
+    if state == "SETTING_VALUE":
+        key = context.user_data.get("setting_key")
+        if key:
+            set_setting(key, text)
+        context.user_data.clear()
+        await update.effective_message.reply_text(
+            "✅ تم حفظ الإعداد بنجاح.",
+            reply_markup=admin_keyboard(),
+        )
+        return True
+
+    # Add button
+    if state == "ADD_BUTTON_TITLE":
+        context.user_data["new_button_title"] = text
+        context.user_data["state"] = "ADD_BUTTON_PARENT"
+        await update.effective_message.reply_text(
+            "📁 أين تريد وضع الزر؟\n\n"
+            "أرسل ID الزر الأب، أو اكتب 0 ليكون في الرئيسية.",
+            reply_markup=cancel_keyboard(),
+        )
+        return True
+
+    if state == "ADD_BUTTON_PARENT":
+        try:
+            parent_id = None if text == "0" else int(text)
+            if parent_id is not None and not get_button(parent_id):
+                raise ValueError
+        except ValueError:
+            await update.effective_message.reply_text(
+                "❌ ID غير صحيح. أرسل رقم زر موجود أو 0."
+            )
+            return True
+
+        bid = add_button(
+            context.user_data.get("new_button_title", "🔘 زر جديد"),
+            parent_id,
+            "menu",
+            "",
+        )
+        context.user_data.clear()
+
+        await update.effective_message.reply_text(
+            f"✅ تم إنشاء الزر.\n🆔 ID: <code>{bid}</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_keyboard(),
+        )
+        return True
+
+    # Edit button select
+    if state == "EDIT_BUTTON_SELECT":
+        bid = parse_id_from_button_text(text)
+        if not bid or not get_button(bid):
+            await update.effective_message.reply_text("❌ اختر زرًا صحيحًا.")
+            return True
+        context.user_data["edit_button_id"] = bid
+        context.user_data["state"] = "EDIT_BUTTON_MENU"
+        await update.effective_message.reply_text(
+            "✏️ ماذا تريد تعديل؟",
+            reply_markup=reply_kb([
+                ["📝 الاسم", "🔗 الرابط"],
+                ["🎯 نوع الإجراء"],
+                ["🔘 تفعيل/تعطيل"],
+                ["⬅️ رجوع"],
+            ]),
+        )
+        return True
+
+    if state == "EDIT_BUTTON_MENU":
+        bid = context.user_data["edit_button_id"]
+        if text == "📝 الاسم":
+            context.user_data["state"] = "EDIT_BUTTON_NAME"
+            await update.effective_message.reply_text(
+                "✍️ أرسل الاسم الجديد:", reply_markup=cancel_keyboard()
+            )
+            return True
+        if text == "🔗 الرابط":
+            context.user_data["state"] = "EDIT_BUTTON_URL"
+            await update.effective_message.reply_text(
+                "🔗 أرسل الرابط:", reply_markup=cancel_keyboard()
+            )
+            return True
+        if text == "🎯 نوع الإجراء":
+            context.user_data["state"] = "EDIT_BUTTON_ACTION"
+            await update.effective_message.reply_text(
+                "اختر النوع:",
+                reply_markup=reply_kb([
+                    ["📂 قائمة", "📄 محتوى"],
+                    ["🔎 بحث", "⭐ مفضلة"],
+                    ["🔔 إشعارات", "⭐ تقييم"],
+                    ["💬 مراسلة", "ℹ️ حول"],
+                    ["🔗 رابط"],
+                    ["❌ إلغاء"],
+                ]),
+            )
+            return True
+        if text == "🔘 تفعيل/تعطيل":
+            b = get_button(bid)
+            update_button(bid, enabled=0 if b["enabled"] else 1)
+            context.user_data.clear()
+            await update.effective_message.reply_text(
+                "✅ تم تغيير حالة الزر.",
+                reply_markup=admin_keyboard(),
+            )
+            return True
+
+    if state == "EDIT_BUTTON_NAME":
+        update_button(context.user_data["edit_button_id"], title=text)
+        context.user_data.clear()
+        await update.effective_message.reply_text(
+            "✅ تم تعديل اسم الزر.", reply_markup=admin_keyboard()
+        )
+        return True
+
+    if state == "EDIT_BUTTON_URL":
+        update_button(
+            context.user_data["edit_button_id"],
+            action_type="url",
+            action_value=text,
+        )
+        context.user_data.clear()
+        await update.effective_message.reply_text(
+            "✅ تم حفظ الرابط.", reply_markup=admin_keyboard()
+        )
+        return True
+
+    if state == "EDIT_BUTTON_ACTION":
+        mapping = {
+            "📂 قائمة": ("menu", ""),
+            "📄 محتوى": ("content", ""),
+            "🔎 بحث": ("search", ""),
+            "⭐ مفضلة": ("favorites", ""),
+            "🔔 إشعارات": ("notifications", ""),
+            "⭐ تقييم": ("rating", ""),
+            "💬 مراسلة": ("contact", ""),
+            "ℹ️ حول": ("about", ""),
+            "🔗 رابط": ("url", ""),
+        }
+        if text in mapping:
+            action, value = mapping[text]
+            update_button(
+                context.user_data["edit_button_id"],
+                action_type=action,
+                action_value=value,
+            )
+            context.user_data.clear()
+            await update.effective_message.reply_text(
+                "✅ تم تعديل وظيفة الزر.",
+                reply_markup=admin_keyboard(),
+            )
+            return True
+
+    # Delete confirmation
+    if state == "DELETE_BUTTON_SELECT":
+        bid = parse_id_from_button_text(text)
+        if not bid or not get_button(bid):
+            await update.effective_message.reply_text("❌ اختر زرًا صحيحًا.")
+            return True
+
+        context.user_data["delete_button_id"] = bid
+        context.user_data["state"] = "DELETE_CONFIRM"
+        await update.effective_message.reply_text(
+            f"⚠️ <b>تأكيد الحذف</b>\n\n"
+            f"سيتم حذف الزر وكل الأزرار الموجودة تحته.\n\n"
+            f"هل أنت متأكد؟",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_kb([
+                ["✅ تأكيد الحذف", "❌ إلغاء"],
+            ]),
+        )
+        return True
+
+    if state == "DELETE_CONFIRM":
+        if text == "✅ تأكيد الحذف":
+            delete_button_tree(context.user_data["delete_button_id"])
+            context.user_data.clear()
+            await update.effective_message.reply_text(
+                "🗑 تم الحذف بنجاح.",
+                reply_markup=admin_keyboard(),
+            )
+            return True
+
+    # Move
+    if state == "MOVE_BUTTON_SELECT":
+        bid = parse_id_from_button_text(text)
+        if not bid or not get_button(bid):
+            await update.effective_message.reply_text("❌ اختر زرًا صحيحًا.")
+            return True
+        context.user_data["move_button_id"] = bid
+        context.user_data["state"] = "MOVE_BUTTON_PARENT"
+        await update.effective_message.reply_text(
+            "🔄 أرسل ID الزر الأب الجديد، أو 0 للرئيسية:",
+            reply_markup=cancel_keyboard(),
+        )
+        return True
+
+    if state == "MOVE_BUTTON_PARENT":
+        bid = context.user_data["move_button_id"]
+        try:
+            parent = None if text == "0" else int(text)
+            if parent is not None and not get_button(parent):
+                raise ValueError
+        except ValueError:
+            await update.effective_message.reply_text("❌ ID غير صحيح.")
+            return True
+
+        context.user_data["state"] = "MOVE_CONFIRM"
+        context.user_data["move_parent"] = parent
+        await update.effective_message.reply_text(
+            "⚠️ تأكيد النقل؟",
+            reply_markup=reply_kb([
+                ["✅ تأكيد النقل", "❌ إلغاء"],
+            ]),
+        )
+        return True
+
+    if state == "MOVE_CONFIRM":
+        if text == "✅ تأكيد النقل":
+            ok = move_button(
+                context.user_data["move_button_id"],
+                context.user_data["move_parent"],
+            )
+            context.user_data.clear()
+            await update.effective_message.reply_text(
+                "✅ تم النقل بنجاح." if ok else "❌ تعذر النقل.",
+                reply_markup=admin_keyboard(),
+            )
+            return True
+
+    # Content editor
+    if state == "ADD_CONTENT_SELECT":
+        bid = parse_id_from_button_text(text)
+        if not bid or not get_button(bid):
+            await update.effective_message.reply_text("❌ اختر زرًا صحيحًا.")
+            return True
+        context.user_data["content_button_id"] = bid
+        context.user_data["state"] = "ADD_CONTENT_WAIT"
+        await update.effective_message.reply_text(
+            "📨 أرسل المحتوى الآن.\n\n"
+            "سيتم حفظ الرسالة الحالية كما هي.",
+            reply_markup=cancel_keyboard(),
+        )
+        return True
+
+    if state == "DELETE_CONTENT_SELECT":
+        if not text.startswith("📄") or "〔C" not in text:
+            await update.effective_message.reply_text("❌ اختر محتوى صحيحًا.")
+            return True
+        try:
+            cid = int(text.split("〔C", 1)[1].split("〕", 1)[0])
+        except ValueError:
+            await update.effective_message.reply_text("❌ ID غير صحيح.")
+            return True
+
+        context.user_data["delete_content_id"] = cid
+        context.user_data["state"] = "DELETE_CONTENT_CONFIRM"
+        await update.effective_message.reply_text(
+            "⚠️ تأكيد حذف المحتوى؟",
+            reply_markup=reply_kb([
+                ["✅ تأكيد الحذف", "❌ إلغاء"],
+            ]),
+        )
+        return True
+
+    if state == "DELETE_CONTENT_CONFIRM":
+        if text == "✅ تأكيد الحذف":
+            delete_content(context.user_data["delete_content_id"])
+            context.user_data.clear()
+            await update.effective_message.reply_text(
+                "🗑 تم حذف المحتوى.",
+                reply_markup=admin_keyboard(),
+            )
+            return True
+
+    return False
+
+
+# ============================================================
+# ADMIN MEDIA / USER MEDIA ROUTER
+# ============================================================
+
+async def route_media(update, context):
+    # Text messages are handled by the dedicated text router.
+    # This handler is intentionally registered before it so media can be
+    # captured, but text must be delegated explicitly.
+    if update.message and update.message.text is not None:
+        await handle_text(update, context)
+        return
+
+    user = update.effective_user
+    if not user:
+        return
+
+    save_user(user)
+
+    if is_banned(user.id) and user.id != ADMIN_ID:
+        return
+
+    state = context.user_data.get("state")
+
+    if user.id == ADMIN_ID and state == "ADD_CONTENT_WAIT":
+        bid = context.user_data.get("content_button_id")
+        if not bid:
+            context.user_data.clear()
+            return
+
+        cid = add_content(bid, update.effective_message)
+        c = get_content(cid)
+        title = c["title"] if c else "محتوى جديد"
+
+        context.user_data.clear()
+        await update.effective_message.reply_text(
+            f"👁 <b>معاينة المحتوى</b>\n\n"
+            f"📚 الزر: {html.escape(get_button(bid)['title'])}\n"
+            f"📄 {html.escape(title)}\n\n"
+            f"⚠️ تم الحفظ والنشر.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_keyboard(),
+        )
+
+        await send_new_content_notifications(bid, title)
+        return
+
+    if state == "USER_CONTACT":
+        mid = add_user_message(update)
+        context.user_data.clear()
+        await update.effective_message.reply_text(
+            "✅ وصلت رسالتك إلى الإدارة ❤️",
+            reply_markup=home_keyboard(),
+        )
+        try:
+            await telegram_app.bot.copy_message(
+                chat_id=ADMIN_ID,
+                from_chat_id=update.effective_chat.id,
+                message_id=update.effective_message.message_id,
+            )
+            await telegram_app.bot.send_message(
+                ADMIN_ID,
+                f"💬 رسالة جديدة من المستخدم\n🆔 <code>{user.id}</code>\nرقم: {mid}",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+        return
+
+
+def add_user_message(update):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO messages
+        (user_id,text,source_chat_id,source_message_id,created_at)
+        VALUES(?,?,?,?,?)
+    """, (
+        update.effective_user.id,
+        update.effective_message.text or "",
+        update.effective_chat.id,
+        update.effective_message.message_id,
+        now(),
+    ))
+    mid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return mid
+
+
+# ============================================================
+# MAIN TEXT ROUTER
+# ============================================================
+
+async def handle_text(update, context):
     if not update.message or not update.effective_user:
         return
 
     user = update.effective_user
-    upsert_user(user)
-    text = update.message.text or ""
-    st = get_state(user.id)
+    text = (update.message.text or "").strip()
+    save_user(user)
 
-    # Admin actions bypass subscription gate.
-    if not is_admin(user.id):
-        if not await require_subscription(update, context):
+    if is_banned(user.id) and user.id != ADMIN_ID:
+        await update.message.reply_text("🚫 لا يمكنك استخدام البوت.")
+        return
+
+    # Admin bypasses subscription and maintenance.
+    if user.id == ADMIN_ID:
+        if text == "/admin":
+            await show_admin(update)
             return
 
-    # Always-available navigation.
-    if text in {"🏠 الرئيسية", "القائمة الرئيسية", "/home"}:
-        await show_home(update, context)
-        return
+        if text == "⚙️ إعدادات البوت":
+            await admin_settings(update, context); return
+        if text == "🎛 محرر الأزرار":
+            await admin_buttons(update, context); return
+        if text == "📝 محرر المحتوى":
+            await admin_content(update, context); return
+        if text == "📣 رسالة جماعية":
+            await admin_broadcast_start(update, context); return
+        if text == "👁 المعاينة":
+            await admin_preview(update, context); return
+        if text == "📊 الإحصائيات":
+            await admin_stats(update, context); return
+        if text == "🛠 الصيانة":
+            current = get_setting("maintenance") == "1"
+            set_setting("maintenance", "0" if current else "1")
+            await update.message.reply_text(
+                f"🛠 الصيانة الآن: {'🟢 متوقفة' if current else '🔴 مفعلة'}",
+                reply_markup=admin_keyboard(),
+            )
+            return
+        if text == "🏠 واجهة المستخدم":
+            await show_home(update); return
 
-    if text == "👑 لوحة الأدمن":
-        if is_admin(user.id):
-            save_state(user.id, state="admin")
-            await send_clean(update, context, "👑 **لوحة الإدارة**", reply_markup=admin_keyboard())
-        return
-
-    # ---------------- editor state ----------------
-    if is_admin(user.id) and st and st["state"] == "editor":
         if text == "➕ إضافة زر":
             await add_button_start(update, context); return
-        if text == "✏️ تعديل المحدد":
-            await edit_selected_start(update, context); return
-        if text == "📝 محتوى المحدد":
-            await edit_content_start(update, context); return
-        if text == "🗑 حذف المحدد":
-            await delete_selected_start(update, context); return
-        if text == "↕️ ترتيب الأزرار":
-            await move_menu(update, context); return
-        if text == "🔒 صلاحيات المحدد":
-            await permission_menu(update, context); return
-        if text == "👁️ معاينة":
-            await preview_selected(update, context); return
-        if text == "⚙️ إعدادات البوت":
-            await bot_settings(update, context); return
-        if text == "⏹️ إيقاف المحرر":
-            save_state(user.id, state="admin")
-            await send_clean(update, context, "👑 تم إيقاف المحرر.", reply_markup=admin_keyboard())
-            return
-        if text == "↩️ رجوع":
-            parent = get_button(st["editor_menu_id"]) if st["editor_menu_id"] else None
-            await open_editor(update, context, parent["parent_id"] if parent else None)
-            return
-        if text == "🏠 الرئيسية":
-            await open_editor(update, context, None); return
-        if await editor_button_click(update, context, text):
-            return
-
-    # ---------------- editor workflows ----------------
-    if is_admin(user.id) and st:
-        state = st["state"]
-
-        if state == "await_add_title":
-            if text == "❌ إلغاء":
-                await open_editor(update, context, st["editor_menu_id"]); return
-            title = text.strip()
-            if not title:
-                return
-            parent = st["editor_menu_id"]
-            new_id = create_button(parent, title)
-            save_state(user.id, editor_menu_id=parent, selected_button_id=new_id, state="editor")
-            await open_editor(update, context, parent)
-            return
-
-        if state == "await_rename":
-            if text == "❌ إلغاء":
-                await open_editor(update, context, st["editor_menu_id"]); return
-            bid = st["temp_id"]
-            save_state(user.id, state="confirm_rename", temp_id=bid, temp_text=text.strip())
-            await send_clean(
-                update, context,
-                f"✏️ **تأكيد التعديل**\n\nالاسم الجديد:\n{text.strip()}\n\nهل تريد الحفظ؟",
-                reply_markup=confirm_keyboard("✅ حفظ التعديل"),
-            )
-            return
-
-        if state == "confirm_rename":
-            if text == "❌ إلغاء":
-                await open_editor(update, context, st["editor_menu_id"]); return
-            if text == "✅ حفظ التعديل":
-                rename_button(st["temp_id"], st["temp_text"])
-                await open_editor(update, context, st["editor_menu_id"])
-            return
-
-        if state == "confirm_delete":
-            if text == "❌ إلغاء":
-                await open_editor(update, context, st["editor_menu_id"]); return
-            if text == "✅ نعم، احذف":
-                delete_button(st["temp_id"])
-                await open_editor(update, context, st["editor_menu_id"])
-            return
-
-        if state == "move":
-            if text == "↩️ إلغاء":
-                await open_editor(update, context, st["editor_menu_id"]); return
-            if text in {"⬆️ للأعلى", "⬇️ للأسفل"}:
-                move_button(st["selected_button_id"], -1 if text.startswith("⬆") else 1)
-                await open_editor(update, context, st["editor_menu_id"])
-            return
-
-        if state == "permissions":
-            bid = st["temp_id"]
-            if text == "🔒 للأدمن فقط":
-                set_admin_only(bid, True)
-                await open_editor(update, context, st["editor_menu_id"])
-                return
-            if text == "👥 للجميع":
-                set_admin_only(bid, False)
-                await open_editor(update, context, st["editor_menu_id"])
-                return
-            if text == "👻 إخفاء/إظهار":
-                b = get_button(bid)
-                set_hidden(bid, not bool(b["hidden"]))
-                await open_editor(update, context, st["editor_menu_id"])
-                return
-            if text == "↩️ إلغاء":
-                await open_editor(update, context, st["editor_menu_id"])
-                return
-
-        if state == "await_content":
-            if text == "❌ إلغاء":
-                await open_editor(update, context, st["editor_menu_id"]); return
-            bid = st["temp_id"]
-            save_state(user.id, state="confirm_content", temp_id=bid, temp_text=text)
-            await send_clean(
-                update, context,
-                f"📝 **تأكيد المحتوى**\n\n{text[:1500]}\n\nهل تريد حفظه؟",
-                reply_markup=confirm_keyboard("✅ حفظ المحتوى"),
-            )
-            return
-
-        if state == "confirm_content":
-            if text == "❌ إلغاء":
-                await open_editor(update, context, st["editor_menu_id"]); return
-            if text == "✅ حفظ المحتوى":
-                save_post(st["temp_id"], text=st["temp_text"], media_type=None, file_id=None)
-                await open_editor(update, context, st["editor_menu_id"])
-            return
-
-        if state == "confirm_media":
-            if text == "❌ إلغاء":
-                await open_editor(update, context, st["editor_menu_id"]); return
-            if text == "✅ حفظ المحتوى":
-                pending = context.user_data.pop("pending_media", None)
-                if pending:
-                    media_type, file_id = pending
-                    save_post(
-                        st["temp_id"],
-                        text=st["temp_text"],
-                        media_type=media_type,
-                        file_id=file_id,
-                    )
-                await open_editor(update, context, st["editor_menu_id"])
-            return
-
-        if state == "await_broadcast":
-            if text == "❌ إلغاء":
-                save_state(user.id, state="admin")
-                await send_clean(update, context, "❌ تم الإلغاء.", reply_markup=admin_keyboard())
-                return
-            save_state(user.id, state="confirm_broadcast", temp_text=st["temp_text"], temp_id=None)
-            context.user_data["broadcast_text"] = text
-            target = "المشتركين بالإشعارات" if st["temp_text"] == "notifications" else "جميع المستخدمين"
-            await send_clean(
-                update, context,
-                f"📣 **تأكيد الإرسال**\n\nالهدف: {target}\n\n{text[:1500]}",
-                reply_markup=confirm_keyboard("📤 إرسال الآن"),
-            )
-            return
-
-        if state == "confirm_broadcast":
-            if text == "❌ إلغاء":
-                save_state(user.id, state="admin")
-                await send_clean(update, context, "❌ تم الإلغاء.", reply_markup=admin_keyboard())
-                return
-            if text == "📤 إرسال الآن":
-                body = context.user_data.get("broadcast_text", "")
-                only_notifications = st["temp_text"] == "notifications"
-                with db() as c:
-                    if only_notifications:
-                        users = c.execute("SELECT user_id FROM users WHERE notifications=1").fetchall()
-                    else:
-                        users = c.execute("SELECT user_id FROM users").fetchall()
-                sent = 0
-                for row in users:
-                    try:
-                        await context.bot.send_message(row["user_id"], body)
-                        sent += 1
-                    except Exception:
-                        pass
-                save_state(user.id, state="admin")
-                await send_clean(
-                    update, context,
-                    f"📤 تم الإرسال.\n✅ نجح: {sent}\n\n🧹 تم إنهاء العملية.",
-                    reply_markup=admin_keyboard(),
+        if text == "✏️ تعديل زر":
+            await edit_button_start(update, context); return
+        if text == "🗑 حذف زر":
+            await delete_button_start(update, context); return
+        if text == "🔄 نقل زر":
+            await move_button_start(update, context); return
+        if text == "📋 عرض الأزرار":
+            rows = []
+            for b in all_buttons():
+                rows.append(
+                    f"🔘 <code>{b['id']}</code> — {html.escape(b['title'])} "
+                    f"— {b['action_type']} — {'🟢' if b['enabled'] else '🔴'}"
                 )
-                return
-
-        if state == "contact":
-            if text == "↩️ رجوع" or text == "🏠 الرئيسية":
-                await show_home(update, context); return
-            await context.bot.send_message(
-                ADMIN_ID,
-                f"💬 رسالة من {user.full_name} (@{user.username or 'بدون معرف'})\n\n{text}"
+            await update.message.reply_text(
+                "📋 <b>الأزرار</b>\n\n" + ("\n".join(rows) or "لا توجد."),
+                parse_mode=ParseMode.HTML,
+                reply_markup=admin_keyboard(),
             )
-            await send_clean(update, context, "✅ وصلت رسالتك إلى الإدارة.", reply_markup=kb([["🏠 الرئيسية"]]))
             return
 
-    # ---------------- admin menu ----------------
-    if is_admin(user.id):
-        if text == "🎛 محرر الأزرار":
-            await open_editor(update, context, None); return
-        if text == "📝 محرر المحتوى":
-            await open_editor(update, context, None); return
-        if text == "📢 إعلان":
-            await broadcast_start(update, context, False); return
-        if text == "📣 رسالة جماعية":
-            await broadcast_start(update, context, False); return
-        if text == "🔔 الإشعارات":
-            await broadcast_start(update, context, True); return
-        if text == "💬 المراسلات":
-            await send_clean(update, context, "💬 المراسلات: رسائل المستخدمين تصل مباشرة إلى الإدارة.", reply_markup=admin_keyboard()); return
+        if text == "➕ إضافة محتوى":
+            context.user_data["state"] = "ADD_CONTENT_SELECT"
+            await update.message.reply_text(
+                "📚 اختر الزر الذي سيحتوي على المحتوى:",
+                reply_markup=admin_button_selector(),
+            )
+            return
+
+        if text == "🗑 حذف محتوى":
+            contents = []
+            for b in all_buttons():
+                for c in get_contents(b["id"], False):
+                    contents.append([KeyboardButton(
+                        f"📄 {c['title'][:50]} 〔C{c['id']}〕"
+                    )])
+            contents.append([KeyboardButton("❌ إلغاء")])
+            context.user_data["state"] = "DELETE_CONTENT_SELECT"
+            await update.message.reply_text(
+                "🗑 اختر المحتوى:",
+                reply_markup=reply_kb(contents),
+            )
+            return
+
         if text == "👥 المستخدمون":
-            await stats(update, context); return
-        if text == "📊 الإحصائيات":
-            await stats(update, context); return
-        if text == "⭐ التقييمات":
-            await ratings_report(update, context); return
-        if text == "⚙️ إعدادات البوت":
-            await bot_settings(update, context); return
-        if text == "👁️ معاينة":
-            await show_home(update, context); return
-
-        if text.startswith("🛠 الصيانة:"):
-            new = "0" if get_setting("maintenance") == "1" else "1"
-            set_setting("maintenance", new)
-            await bot_settings(update, context); return
-
-        if text == "🏷️ تعديل اسم الرئيسية":
-            save_state(user.id, state="await_home_title")
-            await send_clean(update, context, "🏷️ أرسل اسم القائمة الرئيسية الجديد:", reply_markup=kb([["❌ إلغاء"]]))
+            conn = db()
+            rows = conn.execute("""
+                SELECT user_id,first_name,username,banned,notifications
+                FROM users ORDER BY last_seen DESC LIMIT 30
+            """).fetchall()
+            conn.close()
+            lines = ["👥 <b>المستخدمون</b>\n"]
+            for r in rows:
+                lines.append(
+                    f"{'🚫' if r['banned'] else '🟢'} "
+                    f"<code>{r['user_id']}</code> "
+                    f"{html.escape(r['first_name'] or '-')}"
+                )
+            await update.message.reply_text(
+                "\n".join(lines),
+                parse_mode=ParseMode.HTML,
+                reply_markup=admin_keyboard(),
+            )
             return
 
-        if text == "📝 تعديل رسالة الترحيب":
-            save_state(user.id, state="await_welcome")
-            await send_clean(update, context, "📝 أرسل رسالة الترحيب الجديدة:", reply_markup=kb([["❌ إلغاء"]]))
+        if text == "📢 الإعلان":
+            context.user_data["state"] = "ADMIN_ANNOUNCEMENT"
+            await update.message.reply_text(
+                "📢 أرسل الإعلان. ستظهر لك المعاينة قبل النشر.",
+                reply_markup=cancel_keyboard(),
+            )
             return
 
-        if text == "🔐 إعداد قناة الاشتراك":
-            save_state(user.id, state="await_channel")
-            await send_clean(update, context, "🔐 أرسل @username للقناة المطلوبة للاشتراك:", reply_markup=kb([["❌ إلغاء"]]))
+        # Admin state processing.
+        state = context.user_data.get("state")
+        if state == "ADMIN_BROADCAST":
+            await broadcast_preview(update, context); return
+        if state == "ADMIN_BROADCAST_CONFIRM":
+            if text == "✅ تأكيد الإرسال":
+                await execute_broadcast(update, context)
+            elif text == "❌ إلغاء":
+                context.user_data.clear()
+                await show_admin(update)
             return
 
-        if text == "📩 رسائل النظام":
-            await send_clean(update, context, "📩 رسائل النظام قابلة للتعديل من إعدادات المشروع.", reply_markup=admin_keyboard())
+        if state == "ADMIN_ANNOUNCEMENT":
+            context.user_data["state"] = "ADMIN_BROADCAST_CONFIRM"
+            context.user_data["broadcast_chat_id"] = update.effective_chat.id
+            context.user_data["broadcast_message_id"] = update.message.message_id
+            await update.message.reply_text(
+                "👁 معاينة الإعلان جاهزة.\n\n⚠️ تأكيد النشر؟",
+                reply_markup=reply_kb([
+                    ["✅ تأكيد الإرسال", "❌ إلغاء"]
+                ]),
+            )
             return
 
-        if text == "↩️ رجوع للأدمن":
-            save_state(user.id, state="admin")
-            await send_clean(update, context, "👑 لوحة الإدارة", reply_markup=admin_keyboard())
+        if state and await handle_admin_text(update, context, state, text):
             return
 
-        if st and st["state"] == "await_home_title":
-            if text == "❌ إلغاء":
-                await bot_settings(update, context); return
-            set_setting("home_title", text.strip())
-            await bot_settings(update, context); return
+        if text == "⬅️ رجوع" or text == "❌ إلغاء":
+            context.user_data.clear()
+            await show_admin(update)
+            return
 
-        if st and st["state"] == "await_welcome":
-            if text == "❌ إلغاء":
-                await bot_settings(update, context); return
-            set_setting("welcome_text", text)
-            await bot_settings(update, context); return
-
-        if st and st["state"] == "await_channel":
-            if text == "❌ إلغاء":
-                await bot_settings(update, context); return
-            set_setting("required_channel", text.strip())
-            await bot_settings(update, context); return
-
-    # ---------------- normal menu navigation ----------------
-    if text == "↩️ رجوع":
-        st = get_state(user.id)
-        parent_id = st["menu_id"] if st else None
-        parent = get_button(parent_id) if parent_id else None
-        if parent and parent["parent_id"]:
-            await show_menu(update, context, parent["parent_id"])
-        else:
-            await show_home(update, context)
+    # Maintenance for normal users.
+    if get_setting("maintenance") == "1":
+        await update.message.reply_text(
+            get_setting("maintenance_text"),
+            reply_markup=reply_kb([["🔄 تحديث"]]),
+        )
         return
 
-    if text == "⭐ تقييم":
-        st = get_state(user.id)
-        bid = st["menu_id"] if st else None
-        if bid:
-            save_state(user.id, state="await_rating", temp_id=bid)
-            await send_clean(
-                update, context,
-                "⭐ قيّم هذا المحتوى من 1 إلى 5:",
-                reply_markup=kb([["1 ⭐", "2 ⭐", "3 ⭐"], ["4 ⭐", "5 ⭐"], ["❌ إلغاء"]]),
+    # Subscription check on EVERY normal interaction.
+    if await subscription_required(user.id):
+        await send_subscription_gate(update)
+        return
+
+    state = context.user_data.get("state")
+
+    if state == "USER_SEARCH":
+        query = text
+        conn = db()
+        rows = conn.execute("""
+            SELECT DISTINCT b.id,b.title
+            FROM buttons b
+            LEFT JOIN contents c ON c.button_id=b.id
+            WHERE b.enabled=1
+            AND (b.title LIKE ? OR c.title LIKE ?)
+            ORDER BY b.position,b.id
+            LIMIT 30
+        """, (f"%{query}%", f"%{query}%")).fetchall()
+        conn.close()
+
+        context.user_data.clear()
+        if not rows:
+            await update.message.reply_text(
+                "🔎 لم أجد نتائج.",
+                reply_markup=home_keyboard(),
+            )
+            return
+
+        await update.message.reply_text(
+            "🔎 <b>نتائج البحث</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_kb(
+                [[KeyboardButton(r["title"])] for r in rows] +
+                [["🏠 الرئيسية"]]
+            ),
+        )
+        return
+
+    if state == "USER_CONTACT":
+        mid = add_user_message(update)
+        context.user_data.clear()
+        try:
+            await telegram_app.bot.send_message(
+                ADMIN_ID,
+                f"💬 <b>رسالة جديدة #{mid}</b>\n"
+                f"👤 {html.escape(user.full_name)}\n"
+                f"🆔 <code>{user.id}</code>\n\n"
+                f"{html.escape(text)}",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+        await update.message.reply_text(
+            "✅ وصلت رسالتك للإدارة.",
+            reply_markup=home_keyboard(),
+        )
+        return
+
+    if state == "USER_RATING":
+        if text.startswith("⭐"):
+            rating = min(5, text.count("⭐"))
+            context.user_data["rating"] = rating
+            context.user_data["state"] = "USER_RATING_COMMENT"
+            await update.message.reply_text(
+                "✍️ اكتب ملاحظتك أو اكتب «بدون ملاحظة»:",
+                reply_markup=cancel_keyboard(),
             )
         return
 
-    if st and st["state"] == "await_rating":
-        if text == "❌ إلغاء":
-            await show_home(update, context); return
-        if "⭐" in text and text[0].isdigit():
-            rating = int(text[0])
-            with db() as c:
-                c.execute(
-                    "INSERT INTO ratings(user_id,button_id,rating,created_at) VALUES(?,?,?,?)",
-                    (user.id, st["temp_id"], rating, int(time.time())),
+    if state == "USER_RATING_COMMENT":
+        rating = context.user_data.get("rating", 5)
+        comment = "" if text == "بدون ملاحظة" else text
+        conn = db()
+        conn.execute("""
+            INSERT INTO ratings(user_id,rating,comment,created_at)
+            VALUES(?,?,?,?)
+        """, (user.id, rating, comment, now()))
+        conn.commit()
+        conn.close()
+        context.user_data.clear()
+        await update.message.reply_text(
+            "❤️ شكراً على تقييمك!",
+            reply_markup=home_keyboard(),
+        )
+        return
+
+    if text in ("🏠 الرئيسية", "🏠 القائمة الرئيسية", "/start"):
+        context.user_data.clear()
+        await show_home(update)
+        return
+
+    if text == "🔄 تحديث":
+        await show_home(update)
+        return
+
+    if text == "🔔 تفعيل الإشعارات":
+        set_notifications(user.id, True)
+        await update.message.reply_text(
+            "🔔 تم تفعيل الإشعارات. ستصلك تحديثات المحتوى الجديد.",
+            reply_markup=home_keyboard(),
+        )
+        return
+
+    if text == "🔕 إيقاف الإشعارات":
+        set_notifications(user.id, False)
+        await update.message.reply_text(
+            "🔕 تم إيقاف الإشعارات.",
+            reply_markup=home_keyboard(),
+        )
+        return
+
+    if text in ("⭐ إضافة للمفضلة", "💔 إزالة من المفضلة"):
+        state_button = context.user_data.get("last_button_id")
+        if state_button:
+            added = toggle_favorite(user.id, state_button)
+            await update.message.reply_text(
+                "⭐ تمت الإضافة للمفضلة." if added else "💔 تمت الإزالة من المفضلة.",
+                reply_markup=home_keyboard(),
+            )
+        else:
+            await show_favorites(update)
+        return
+
+    # Content button selection: 📄 ... 〔Cid〕
+    if "〔C" in text and text.startswith("📄"):
+        try:
+            cid = int(text.split("〔C", 1)[1].split("〕", 1)[0])
+            c = get_content(cid)
+            if c:
+                context.user_data["last_button_id"] = c["button_id"]
+                await telegram_app.bot.copy_message(
+                    chat_id=update.effective_chat.id,
+                    from_chat_id=c["source_chat_id"],
+                    message_id=c["source_message_id"],
                 )
-            await send_clean(update, context, "❤️ شكراً لتقييمك!", reply_markup=kb([["🏠 الرئيسية"]]))
+                await section_actions(update, c["button_id"])
+                return
+        except Exception:
+            pass
+
+    # Match dynamic button by exact title.
+    conn = db()
+    row = conn.execute("""
+        SELECT id FROM buttons
+        WHERE title=? AND enabled=1
+        ORDER BY id DESC LIMIT 1
+    """, (text,)).fetchone()
+    conn.close()
+
+    if row:
+        context.user_data["last_button_id"] = row["id"]
+        await show_button(update, row["id"])
+        return
+
+    await update.message.reply_text(
+        "🤔 ما فهمت اختيارك.\n\nجرّب أحد الأزرار الظاهرة.",
+        reply_markup=home_keyboard(),
+    )
+
+
+# ============================================================
+# CALLBACKS
+# ============================================================
+
+async def callback_router(update, context):
+    query = update.callback_query
+    await query.answer()
+    user = query.from_user
+
+    if query.data == "SUB:CHECK":
+        if not REQUIRED_CHANNEL:
+            await query.edit_message_text("✅ لا يوجد اشتراك إجباري حالياً.")
             return
 
-    # Match current menu buttons.
-    current_parent = st["menu_id"] if st else None
-    buttons = get_buttons(current_parent, admin=is_admin(user.id))
-    match = next((b for b in buttons if b["title"] == text), None)
-    if match:
-        await show_menu(update, context, match["id"])
+        if await subscription_required(user.id):
+            await query.edit_message_text(
+                "❌ لم يتم التحقق من اشتراكك بعد.\n"
+                "اشترك بالقناة ثم اضغط تحقق مرة أخرى."
+            )
+        else:
+            await query.edit_message_text(
+                "✅ تم التحقق من اشتراكك بنجاح!\n"
+                "ارجع للبوت واختر ما تريد."
+            )
         return
 
-    # Search all top-level buttons for direct access from stale keyboards.
-    top = get_buttons(None, admin=is_admin(user.id))
-    match = next((b for b in top if b["title"] == text), None)
-    if match:
-        await show_menu(update, context, match["id"])
+
+# ============================================================
+# START / WEBHOOK
+# ============================================================
+
+async def start(update, context):
+    save_user(update.effective_user)
+
+    if is_banned(update.effective_user.id) and update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("🚫 تم حظرك من استخدام البوت.")
         return
 
-    await send_clean(
-        update, context,
-        "❓ لم أفهم الاختيار. استخدم أزرار القائمة.",
-        reply_markup=main_keyboard(user.id),
-    )
+    if update.effective_user.id != ADMIN_ID:
+        if get_setting("maintenance") == "1":
+            await update.message.reply_text(get_setting("maintenance_text"))
+            return
+
+        if await subscription_required(update.effective_user.id):
+            await send_subscription_gate(update)
+            return
+
+    await show_home(update)
 
 
-# ---------------------------------------------------------------------------
-# Media handler for content editor
-# ---------------------------------------------------------------------------
-
-async def media_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if not user or not is_admin(user.id) or not update.message:
-        return
-    st = get_state(user.id)
-    if not st or st["state"] != "await_content":
-        return
-
-    media_type = None
-    file_id = None
-    caption = update.message.caption or ""
-
-    if update.message.photo:
-        media_type = "photo"
-        file_id = update.message.photo[-1].file_id
-    elif update.message.document:
-        media_type = "document"
-        file_id = update.message.document.file_id
-    elif update.message.video:
-        media_type = "video"
-        file_id = update.message.video.file_id
-    elif update.message.audio:
-        media_type = "audio"
-        file_id = update.message.audio.file_id
-    else:
-        return
-
-    save_state(
-        user.id,
-        state="confirm_media",
-        temp_id=st["temp_id"],
-        temp_text=caption,
-    )
-    context.user_data["pending_media"] = (media_type, file_id)
-    await send_clean(
-        update, context,
-        f"📝 **تأكيد حفظ المحتوى**\n\nالنوع: {media_type}\n"
-        f"{caption[:500]}\n\nهل تريد الحفظ؟",
-        reply_markup=confirm_keyboard("✅ حفظ المحتوى"),
-    )
+@app.get("/")
+def health():
+    return "Telegram bot is running", 200
 
 
-# ---------------------------------------------------------------------------
-# Commands and callbacks
-# ---------------------------------------------------------------------------
+@app.post(f"/{WEBHOOK_PATH}")
+def webhook():
+    global telegram_app
+    if telegram_app is None:
+        return "Application not ready", 503
 
-async def admin_command(update, context):
-    if is_admin(update.effective_user.id):
-        save_state(update.effective_user.id, state="admin")
-        await send_clean(update, context, "👑 **لوحة الإدارة**", reply_markup=admin_keyboard())
-    else:
-        await update.message.reply_text("⛔ هذا الأمر مخصص للإدارة.")
-
-
-async def verify_command(update, context):
-    upsert_user(update.effective_user)
-    if await subscribed(update.effective_user.id, context.bot):
-        await show_home(update, context)
-    else:
-        await send_clean(update, context, get_setting("subscribe_text"), reply_markup=subscribe_keyboard())
-
-
-async def callback_noop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-
-
-async def error_handler(update, context):
-    log.exception("Unhandled error", exc_info=context.error)
-
-
-# ---------------------------------------------------------------------------
-# Application
-# ---------------------------------------------------------------------------
-
-def build_app():
-    init_db()
-    app = Application.builder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("home", start))
-    app.add_handler(CommandHandler("admin", admin_command))
-    app.add_handler(CommandHandler("verify", verify_command))
-
-    # Media first, then text. This prevents media messages being swallowed.
-    app.add_handler(
-        MessageHandler(
-            filters.PHOTO | filters.Document.ALL | filters.VIDEO | filters.AUDIO,
-            media_router,
+    try:
+        update = Update.de_json(
+            request.get_json(force=True),
+            telegram_app.bot,
         )
+        telegram_app.update_queue.put_nowait(update)
+        return "OK", 200
+    except Exception:
+        logger.exception("Webhook error")
+        return "Bad Request", 400
+
+
+async def post_init(application):
+    # Kept as a harmless hook for Application.builder().post_init().
+    # The worker sets telegram_app and configures webhook/polling explicitly.
+    global telegram_app
+    telegram_app = application
+
+
+def build_application():
+    if not BOT_TOKEN:
+        raise RuntimeError(
+            "BOT_TOKEN غير موجود. أضفه في Environment Variables على Render."
+        )
+
+    application = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(post_init)
+        .build()
     )
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_router))
-    app.add_handler(CallbackQueryHandler(callback_noop))
-    app.add_error_handler(error_handler)
-    return app
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("admin", show_admin))
+    application.add_handler(CallbackQueryHandler(callback_router))
+    application.add_handler(
+        MessageHandler(filters.ALL & ~filters.COMMAND, route_media)
+    )
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
+    )
+    return application
 
 
-def main():
-    app = build_app()
-    log.info("Bot started | admin=%s | channel=%s", ADMIN_ID, REQUIRED_CHANNEL or "<not set>")
-    # run_polling owns the event loop and avoids the "no current event loop"
-    # failure that commonly happens when mixing asyncio.run() with PTB.
-    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+def telegram_worker(application):
+    """Run python-telegram-bot on its own asyncio event loop.
 
+    This avoids the Render/Python error:
+    RuntimeError: There is no current event loop in thread 'MainThread'
+    and correctly awaits Updater.start_polling().
+    """
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    async def start_bot():
+        global telegram_app
+        await application.initialize()
+        telegram_app = application
+        await application.start()
+
+        if WEBHOOK_URL:
+            url = WEBHOOK_URL.rstrip("/") + "/" + WEBHOOK_PATH
+            await application.bot.set_webhook(
+                url=url,
+                drop_pending_updates=False,
+                allowed_updates=Update.ALL_TYPES,
+            )
+            logger.info("Webhook configured: %s", url)
+        else:
+            # Polling mode: remove any old webhook first.
+            await application.bot.delete_webhook(drop_pending_updates=True)
+
+            # IMPORTANT: start_polling() is a coroutine in current PTB.
+            # It must be awaited inside a running event loop.
+            await application.updater.start_polling(
+                drop_pending_updates=True,
+                allowed_updates=Update.ALL_TYPES,
+            )
+            logger.info("Polling started successfully.")
+
+    try:
+        loop.run_until_complete(start_bot())
+        loop.run_forever()
+    except Exception:
+        logger.exception("Telegram worker stopped.")
+    finally:
+        async def stop_bot():
+            try:
+                if application.updater and application.updater.running:
+                    await application.updater.stop()
+            except Exception:
+                logger.exception("Failed to stop updater.")
+
+            try:
+                if application.running:
+                    await application.stop()
+            except Exception:
+                logger.exception("Failed to stop application.")
+
+            try:
+                await application.shutdown()
+            except Exception:
+                logger.exception("Failed to shutdown application.")
+
+        try:
+            loop.run_until_complete(stop_bot())
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+
+
+def run():
+    init_db()
+    application = build_application()
+    logger.info("Admin ID configured: %s", ADMIN_ID)
+
+    # Telegram runs on its own asyncio loop.
+    t = threading.Thread(
+        target=telegram_worker,
+        args=(application,),
+        name="TelegramWorker",
+        daemon=True,
+    )
+    t.start()
+
+    # Render requires the HTTP server to listen on its assigned PORT.
+    app.run(
+        host="0.0.0.0",
+        port=PORT,
+        threaded=True,
+        use_reloader=False,
+    )
 
 if __name__ == "__main__":
-    main()
+    run()

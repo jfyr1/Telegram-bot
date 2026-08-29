@@ -1,17 +1,25 @@
 # -*- coding: utf-8 -*-
 """
-Telegram Educational Bot - Standalone Render version
-- Python 3.11+
-- python-telegram-bot 21.x
-- Flask webhook
-- SQLite database
-- Dynamic sections / nested sections
-- Any Telegram content can be stored (PDF, photo, video, audio, document, text, etc.)
-- Admin editor: add / rename / delete / move / merge sections
-- Add content by sending or forwarding it to the bot
-- Favorites / most visited / ratings / messages
-- About & full usage guide
-- Per-level Back / Exit buttons
+Telegram Educational Bot - Render / Python 3.11+
+Inspired by common MenuBuilder-style features:
+- Nested menus / sections
+- Dynamic button editor
+- Add / rename / delete / move sections
+- Store Telegram messages and media
+- Search content
+- Favorites
+- Ratings + feedback
+- User messages / support
+- Statistics
+- Broadcast to all users
+- Referral/deep-link tracking
+- User balance
+- Ban/unban
+- Admin panel
+- Editable About text
+- Automatic section index
+- Back / Home navigation
+- Flask webhook for Render
 """
 
 import os
@@ -19,22 +27,18 @@ import html
 import sqlite3
 import logging
 import threading
+import asyncio
 from datetime import datetime
 from functools import wraps
 
 from flask import Flask, request
-
-from telegram import (
-    Update,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
-)
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     CommandHandler,
-    ContextTypes,
     MessageHandler,
+    ContextTypes,
     filters,
 )
 
@@ -43,33 +47,31 @@ from telegram.ext import (
 # ============================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-
-# Put your Telegram numeric admin ID in Render Environment Variables:
-# ADMIN_ID=123456789
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+ADMIN_ID = 5734654153
+# You can override the hard-coded admin with Render:
+# ADMIN_ID=5734654153
+try:
+    ADMIN_ID = int(os.getenv("ADMIN_ID", str(ADMIN_ID)))
+except ValueError:
+    ADMIN_ID = 5734654153
 
 PORT = int(os.getenv("PORT", "10000"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
 WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "telegram-webhook").strip("/")
-
 DB_FILE = os.getenv("DB_FILE", "bot.db")
 
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN ØºÙØ± ÙÙØ¬ÙØ¯ ÙÙ Environment Variables")
-if not ADMIN_ID:
-    raise RuntimeError("ADMIN_ID ØºÙØ± ÙÙØ¬ÙØ¯ ÙÙ Environment Variables")
+    raise RuntimeError("BOT_TOKEN is missing. Add it in Render Environment Variables.")
 
 logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger("educational-bot")
 
-app = Flask(__name__)
-application = None
-
+flask_app = Flask(__name__)
+telegram_app = None
 db_lock = threading.RLock()
-
 
 # ============================================================
 # DATABASE
@@ -87,97 +89,149 @@ def init_db():
         cur = conn.cursor()
 
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                first_name TEXT,
-                username TEXT,
-                joined_at TEXT,
-                last_seen TEXT,
-                visits INTEGER DEFAULT 0
-            )
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            first_name TEXT,
+            last_name TEXT,
+            username TEXT,
+            joined_at TEXT,
+            last_seen TEXT,
+            visits INTEGER DEFAULT 0,
+            balance REAL DEFAULT 0,
+            banned INTEGER DEFAULT 0,
+            referrer_id INTEGER
+        )
         """)
 
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS sections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                parent_id INTEGER,
-                name TEXT NOT NULL,
-                sort_order INTEGER DEFAULT 0,
-                created_at TEXT,
-                FOREIGN KEY(parent_id) REFERENCES sections(id)
-            )
+        CREATE TABLE IF NOT EXISTS sections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_id INTEGER,
+            name TEXT NOT NULL,
+            sort_order INTEGER DEFAULT 0,
+            created_at TEXT
+        )
         """)
 
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS contents (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                section_id INTEGER NOT NULL,
-                source_chat_id INTEGER NOT NULL,
-                source_message_id INTEGER NOT NULL,
-                content_type TEXT,
-                title TEXT,
-                created_at TEXT,
-                FOREIGN KEY(section_id) REFERENCES sections(id)
-            )
+        CREATE TABLE IF NOT EXISTS contents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            section_id INTEGER NOT NULL,
+            source_chat_id INTEGER NOT NULL,
+            source_message_id INTEGER NOT NULL,
+            content_type TEXT,
+            title TEXT,
+            created_at TEXT
+        )
         """)
 
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS favorites (
-                user_id INTEGER NOT NULL,
-                section_id INTEGER NOT NULL,
-                PRIMARY KEY(user_id, section_id)
-            )
+        CREATE TABLE IF NOT EXISTS favorites (
+            user_id INTEGER NOT NULL,
+            section_id INTEGER NOT NULL,
+            PRIMARY KEY(user_id, section_id)
+        )
         """)
 
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS ratings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                rating INTEGER NOT NULL,
-                comment TEXT,
-                created_at TEXT
-            )
+        CREATE TABLE IF NOT EXISTS ratings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            rating INTEGER NOT NULL,
+            comment TEXT,
+            created_at TEXT
+        )
         """)
 
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                text TEXT,
-                created_at TEXT,
-                answered INTEGER DEFAULT 0
-            )
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            text TEXT,
+            created_at TEXT,
+            answered INTEGER DEFAULT 0
+        )
         """)
 
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS user_state (
-                user_id INTEGER PRIMARY KEY,
-                state TEXT,
-                value TEXT
-            )
+        CREATE TABLE IF NOT EXISTS user_state (
+            user_id INTEGER PRIMARY KEY,
+            state TEXT,
+            value TEXT
+        )
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS visits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            section_id INTEGER,
+            created_at TEXT
+        )
         """)
 
         conn.commit()
 
-        # Initial structure: only created once.
-        cur.execute("SELECT COUNT(*) AS c FROM sections")
-        if cur.fetchone()["c"] == 0:
-            create_section_db(None, "ð ÙÙØ¯Ø³Ø© ØªÙÙÙØ§Øª Ø§ÙØ­Ø§Ø³ÙØ¨")
+        root = cur.execute(
+            "SELECT id FROM sections WHERE parent_id IS NULL ORDER BY id LIMIT 1"
+        ).fetchone()
+
+        if not root:
+            cur.execute(
+                """INSERT INTO sections(parent_id,name,sort_order,created_at)
+                   VALUES(NULL,?,?,?)""",
+                ("ð ÙÙØ¯Ø³Ø© ØªÙÙÙØ§Øª Ø§ÙØ­Ø§Ø³ÙØ¨", 1, datetime.utcnow().isoformat()),
+            )
+
+        cur.execute(
+            "INSERT OR IGNORE INTO settings(key,value) VALUES('about',?)",
+            ("ð <b>Ø§ÙÙØ³Ø§Ø¹Ø¯ Ø§ÙØªØ¹ÙÙÙÙ Ø§ÙØ°ÙÙ</b>\n\n"
+             "Ø¨ÙØª ØªØ¹ÙÙÙÙ ÙØªÙØ¸ÙÙ Ø§ÙØ£ÙØ³Ø§Ù ÙØ§ÙÙØ­Ø§Ø¶Ø±Ø§Øª ÙØ§ÙÙÙÙØ§Øª ÙØ§ÙØ±Ø³Ø§Ø¦Ù.\n\n"
+             "Ø§Ø³ØªØ®Ø¯Ù Ø§ÙØ£Ø²Ø±Ø§Ø± ÙÙØªÙÙÙ Ø¨ÙÙ Ø§ÙØ£ÙØ³Ø§Ù ÙØ§ÙÙØ­ØªÙÙ.",),
+        )
+
         conn.commit()
         conn.close()
 
 
-def create_section_db(parent_id, name):
+# ============================================================
+# DATABASE HELPERS
+# ============================================================
+
+def get_setting(key, default=""):
     conn = db()
+    row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    conn.close()
+    return row["value"] if row else default
+
+
+def set_setting(key, value):
+    conn = db()
+    conn.execute(
+        "INSERT INTO settings(key,value) VALUES(?,?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, value),
+    )
+    conn.commit()
+    conn.close()
+
+
+def create_section(parent_id, name):
+    conn = db()
+    order_no = conn.execute(
+        "SELECT COALESCE(MAX(sort_order),0)+1 n FROM sections WHERE parent_id IS ?",
+        (parent_id,),
+    ).fetchone()["n"]
     cur = conn.cursor()
     cur.execute(
-        "SELECT COALESCE(MAX(sort_order), 0) + 1 AS n FROM sections WHERE parent_id IS ?",
-        (parent_id,),
-    )
-    order_no = cur.fetchone()["n"]
-    cur.execute(
-        """INSERT INTO sections(parent_id,name,sort_order,created_at)
-           VALUES(?,?,?,?,?)""",
+        "INSERT INTO sections(parent_id,name,sort_order,created_at) VALUES(?,?,?,?)",
         (parent_id, name, order_no, datetime.utcnow().isoformat()),
     )
     sid = cur.lastrowid
@@ -188,9 +242,7 @@ def create_section_db(parent_id, name):
 
 def get_section(section_id):
     conn = db()
-    row = conn.execute(
-        "SELECT * FROM sections WHERE id=?", (section_id,)
-    ).fetchone()
+    row = conn.execute("SELECT * FROM sections WHERE id=?", (section_id,)).fetchone()
     conn.close()
     return row
 
@@ -198,9 +250,7 @@ def get_section(section_id):
 def get_children(parent_id):
     conn = db()
     rows = conn.execute(
-        """SELECT * FROM sections
-           WHERE parent_id IS ?
-           ORDER BY sort_order ASC, id ASC""",
+        "SELECT * FROM sections WHERE parent_id IS ? ORDER BY sort_order,id",
         (parent_id,),
     ).fetchall()
     conn.close()
@@ -210,114 +260,21 @@ def get_children(parent_id):
 def get_contents(section_id):
     conn = db()
     rows = conn.execute(
-        "SELECT * FROM contents WHERE section_id=? ORDER BY id ASC",
+        "SELECT * FROM contents WHERE section_id=? ORDER BY id",
         (section_id,),
     ).fetchall()
     conn.close()
     return rows
 
 
-def rename_section(section_id, name):
-    with db_lock:
-        conn = db()
-        conn.execute(
-            "UPDATE sections SET name=? WHERE id=?",
-            (name, section_id),
-        )
-        conn.commit()
-        conn.close()
-
-
-def delete_section_tree(section_id):
-    with db_lock:
-        conn = db()
-        children = conn.execute(
-            "SELECT id FROM sections WHERE parent_id=?",
-            (section_id,),
-        ).fetchall()
-
-        for child in children:
-            delete_section_tree_db(conn, child["id"])
-
-        conn.execute("DELETE FROM contents WHERE section_id=?", (section_id,))
-        conn.execute("DELETE FROM favorites WHERE section_id=?", (section_id,))
-        conn.execute("DELETE FROM sections WHERE id=?", (section_id,))
-        conn.commit()
-        conn.close()
-
-
-def delete_section_tree_db(conn, section_id):
-    children = conn.execute(
-        "SELECT id FROM sections WHERE parent_id=?", (section_id,)
-    ).fetchall()
-    for child in children:
-        delete_section_tree_db(conn, child["id"])
-
-    conn.execute("DELETE FROM contents WHERE section_id=?", (section_id,))
-    conn.execute("DELETE FROM favorites WHERE section_id=?", (section_id,))
-    conn.execute("DELETE FROM sections WHERE id=?", (section_id,))
-
-
-def move_section(section_id, new_parent_id):
-    if section_id == new_parent_id:
-        return False
-
-    # Prevent moving a section inside one of its own descendants.
-    descendant_ids = collect_descendants(section_id)
-    if new_parent_id in descendant_ids:
-        return False
-
-    with db_lock:
-        conn = db()
-        conn.execute(
-            "UPDATE sections SET parent_id=? WHERE id=?",
-            (new_parent_id, section_id),
-        )
-        conn.commit()
-        conn.close()
-    return True
-
-
-def collect_descendants(section_id):
-    result = set()
-    queue = [section_id]
-    while queue:
-        current = queue.pop()
-        for row in get_children(current):
-            result.add(row["id"])
-            queue.append(row["id"])
-    return result
-
-
-def merge_sections(source_id, target_id):
-    if source_id == target_id:
-        return False
-
-    if target_id in collect_descendants(source_id):
-        return False
-
-    with db_lock:
-        conn = db()
-
-        # Move direct children to target.
-        conn.execute(
-            "UPDATE sections SET parent_id=? WHERE parent_id=?",
-            (target_id, source_id),
-        )
-
-        # Move all stored content.
-        conn.execute(
-            "UPDATE contents SET section_id=? WHERE section_id=?",
-            (target_id, source_id),
-        )
-
-        conn.execute("DELETE FROM favorites WHERE section_id=?", (source_id,))
-        conn.execute("DELETE FROM sections WHERE id=?", (source_id,))
-
-        conn.commit()
-        conn.close()
-
-    return True
+def section_path(section_id):
+    parts = []
+    current = get_section(section_id)
+    while current:
+        parts.append(current["name"])
+        pid = current["parent_id"]
+        current = get_section(pid) if pid else None
+    return "  âº  ".join(reversed(parts))
 
 
 def add_content(section_id, chat_id, message_id, content_type, title):
@@ -349,65 +306,112 @@ def delete_content(content_id):
     conn.close()
 
 
-def add_user(tg_user):
-    now = datetime.utcnow().isoformat()
-    is_new = False
-
-    with db_lock:
-        conn = db()
-        old = conn.execute(
-            "SELECT user_id FROM users WHERE user_id=?",
-            (tg_user.id,),
-        ).fetchone()
-
-        if old is None:
-            is_new = True
-            conn.execute(
-                """INSERT INTO users
-                   (user_id,first_name,username,joined_at,last_seen,visits)
-                   VALUES(?,?,?,?,?,1)""",
-                (
-                    tg_user.id,
-                    tg_user.first_name or "",
-                    tg_user.username or "",
-                    now,
-                    now,
-                ),
-            )
-        else:
-            conn.execute(
-                """UPDATE users SET first_name=?,username=?,
-                   last_seen=?,visits=visits+1 WHERE user_id=?""",
-                (
-                    tg_user.first_name or "",
-                    tg_user.username or "",
-                    now,
-                    tg_user.id,
-                ),
-            )
-
-        conn.commit()
-        conn.close()
-
-    return is_new
-
-
-def user_visits(user_id):
+def rename_section(section_id, name):
     conn = db()
-    row = conn.execute(
-        "SELECT visits FROM users WHERE user_id=?", (user_id,)
-    ).fetchone()
+    conn.execute("UPDATE sections SET name=? WHERE id=?", (name, section_id))
+    conn.commit()
     conn.close()
-    return row["visits"] if row else 0
+
+
+def descendants(section_id):
+    result = set()
+    queue = [section_id]
+    while queue:
+        current = queue.pop()
+        for row in get_children(current):
+            result.add(row["id"])
+            queue.append(row["id"])
+    return result
+
+
+def delete_section_tree(section_id):
+    conn = db()
+    queue = [section_id]
+    ids = []
+    while queue:
+        current = queue.pop()
+        ids.append(current)
+        children = conn.execute(
+            "SELECT id FROM sections WHERE parent_id=?", (current,)
+        ).fetchall()
+        queue.extend([x["id"] for x in children])
+
+    marks = ",".join("?" * len(ids))
+    conn.execute(f"DELETE FROM contents WHERE section_id IN ({marks})", ids)
+    conn.execute(f"DELETE FROM favorites WHERE section_id IN ({marks})", ids)
+    conn.execute(f"DELETE FROM sections WHERE id IN ({marks})", ids)
+    conn.commit()
+    conn.close()
+
+
+def move_section(section_id, parent_id):
+    if section_id == parent_id or parent_id in descendants(section_id):
+        return False
+    conn = db()
+    conn.execute("UPDATE sections SET parent_id=? WHERE id=?", (parent_id, section_id))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def add_user(user, referrer_id=None):
+    now = datetime.utcnow().isoformat()
+    conn = db()
+    old = conn.execute("SELECT * FROM users WHERE user_id=?", (user.id,)).fetchone()
+
+    if old:
+        conn.execute(
+            """UPDATE users SET first_name=?,last_name=?,username=?,
+               last_seen=?,visits=visits+1 WHERE user_id=?""",
+            (
+                user.first_name or "",
+                user.last_name or "",
+                user.username or "",
+                now,
+                user.id,
+            ),
+        )
+    else:
+        valid_ref = referrer_id if referrer_id and referrer_id != user.id else None
+        conn.execute(
+            """INSERT INTO users
+               (user_id,first_name,last_name,username,joined_at,last_seen,visits,referrer_id)
+               VALUES(?,?,?,?,?,?,1,?)""",
+            (
+                user.id,
+                user.first_name or "",
+                user.last_name or "",
+                user.username or "",
+                now,
+                now,
+                valid_ref,
+            ),
+        )
+
+    conn.commit()
+    conn.close()
+    return old is None
+
+
+def is_banned(user_id):
+    conn = db()
+    row = conn.execute("SELECT banned FROM users WHERE user_id=?", (user_id,)).fetchone()
+    conn.close()
+    return bool(row and row["banned"])
+
+
+def set_banned(user_id, value):
+    conn = db()
+    conn.execute("UPDATE users SET banned=? WHERE user_id=?", (1 if value else 0, user_id))
+    conn.commit()
+    conn.close()
 
 
 def set_state(user_id, state, value=""):
     conn = db()
     conn.execute(
-        """INSERT INTO user_state(user_id,state,value)
-           VALUES(?,?,?)
-           ON CONFLICT(user_id) DO UPDATE SET state=excluded.state,
-           value=excluded.value""",
+        """INSERT INTO user_state(user_id,state,value) VALUES(?,?,?)
+           ON CONFLICT(user_id) DO UPDATE SET state=excluded.state,value=excluded.value""",
         (user_id, state, value),
     )
     conn.commit()
@@ -417,11 +421,10 @@ def set_state(user_id, state, value=""):
 def get_state(user_id):
     conn = db()
     row = conn.execute(
-        "SELECT state,value FROM user_state WHERE user_id=?",
-        (user_id,),
+        "SELECT state,value FROM user_state WHERE user_id=?", (user_id,)
     ).fetchone()
     conn.close()
-    return row if row else None
+    return row
 
 
 def clear_state(user_id):
@@ -429,16 +432,6 @@ def clear_state(user_id):
     conn.execute("DELETE FROM user_state WHERE user_id=?", (user_id,))
     conn.commit()
     conn.close()
-
-
-def is_favorite(user_id, section_id):
-    conn = db()
-    row = conn.execute(
-        "SELECT 1 FROM favorites WHERE user_id=? AND section_id=?",
-        (user_id, section_id),
-    ).fetchone()
-    conn.close()
-    return row is not None
 
 
 def toggle_favorite(user_id, section_id):
@@ -466,11 +459,10 @@ def toggle_favorite(user_id, section_id):
     return result
 
 
-def add_rating(user_id, rating, comment=""):
+def add_rating(user_id, rating, comment):
     conn = db()
     conn.execute(
-        """INSERT INTO ratings(user_id,rating,comment,created_at)
-           VALUES(?,?,?,?)""",
+        "INSERT INTO ratings(user_id,rating,comment,created_at) VALUES(?,?,?,?)",
         (user_id, rating, comment, datetime.utcnow().isoformat()),
     )
     conn.commit()
@@ -481,8 +473,7 @@ def add_message(user_id, text):
     conn = db()
     cur = conn.cursor()
     cur.execute(
-        """INSERT INTO messages(user_id,text,created_at)
-           VALUES(?,?,?)""",
+        "INSERT INTO messages(user_id,text,created_at) VALUES(?,?,?)",
         (user_id, text, datetime.utcnow().isoformat()),
     )
     mid = cur.lastrowid
@@ -495,109 +486,90 @@ def add_message(user_id, text):
 # KEYBOARDS
 # ============================================================
 
-MAIN_BUTTONS = [
+MAIN = [
     ["ð Ø§ÙØ£ÙØ³Ø§Ù Ø§ÙØªØ¹ÙÙÙÙØ©"],
-    ["â­ Ø§ÙÙÙØ¶ÙØ©", "ð¥ Ø§ÙØ£ÙØ«Ø± Ø¯Ø®ÙÙØ§Ù"],
-    ["ð¬ Ø§ÙÙØ±Ø§Ø³ÙØ§Øª", "â­ ØªÙÙÙÙ Ø§ÙØ¨ÙØª"],
-    ["â¹ï¸ Ø­ÙÙ Ø§ÙØ¨ÙØª"],
+    ["ð Ø§ÙØ¨Ø­Ø«", "â­ Ø§ÙÙÙØ¶ÙØ©"],
+    ["ð¥ Ø§ÙØ£ÙØ«Ø± Ø¯Ø®ÙÙØ§Ù", "ð¬ Ø§ÙÙØ±Ø§Ø³ÙØ§Øª"],
+    ["â­ ØªÙÙÙÙ Ø§ÙØ¨ÙØª", "â¹ï¸ Ø­ÙÙ Ø§ÙØ¨ÙØª"],
+    ["ð¥ Ø§ÙØ¯Ø¹ÙØ§Øª", "ð° Ø±ØµÙØ¯Ù"],
 ]
 
-ADMIN_BUTTONS = [
-    ["ð§© ÙØ­Ø±Ø± Ø§ÙØ£ÙØ³Ø§Ù"],
-    ["ð¨ ÙØ­Ø±Ø± Ø§ÙÙØ´Ø§Ø±ÙØ§Øª"],
-    ["ð ÙØ­Ø±Ø± Ø§ÙØ£Ø²Ø±Ø§Ø±"],
-    ["ð Ø§ÙØ¥Ø­ØµØ§Ø¦ÙØ§Øª"],
-    ["ð¬ Ø§ÙÙØ±Ø§Ø³ÙØ§Øª ÙØ§ÙØªÙÙÙÙØ§Øª"],
-    ["ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©"],
+ADMIN = [
+    ["ð§© ÙØ­Ø±Ø± Ø§ÙØ£ÙØ³Ø§Ù", "ð¨ ÙØ­Ø±Ø± Ø§ÙÙØ´Ø§Ø±ÙØ§Øª"],
+    ["ð¢ Ø¥Ø±Ø³Ø§Ù Ø¬ÙØ§Ø¹Ù", "ð Ø§ÙØ¥Ø­ØµØ§Ø¦ÙØ§Øª"],
+    ["ð¥ Ø¥Ø¯Ø§Ø±Ø© Ø§ÙÙØ³ØªØ®Ø¯ÙÙÙ", "âï¸ Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª Ø§ÙØ¨ÙØª"],
+    ["ð ØªØ¹Ø¯ÙÙ Ø­ÙÙ Ø§ÙØ¨ÙØª", "ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©"],
 ]
 
 
-def kb(rows, resize=True):
-    return ReplyKeyboardMarkup(rows, resize_keyboard=resize)
+def kb(rows):
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 
 def main_keyboard(user_id):
-    rows = [row[:] for row in MAIN_BUTTONS]
+    rows = [x[:] for x in MAIN]
     if user_id == ADMIN_ID:
         rows.append(["ð ÙÙØ­Ø© Ø§ÙØ¥Ø¯Ø§Ø±Ø©"])
     return kb(rows)
 
 
-def back_keyboard():
-    return kb([
-        ["â¬ï¸ Ø±Ø¬ÙØ¹"],
-        ["ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©"],
-    ])
+def back_kb():
+    return kb([["â¬ï¸ Ø±Ø¬ÙØ¹"], ["ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©"]])
 
 
-def admin_keyboard():
-    return kb(ADMIN_BUTTONS)
+def admin_kb():
+    return kb(ADMIN)
 
 
 # ============================================================
-# HELPERS
+# NAVIGATION
 # ============================================================
 
-def admin_only(func):
-    @wraps(func)
-    async def wrapper(update, context, *args, **kwargs):
-        if update.effective_user.id != ADMIN_ID:
-            await update.effective_message.reply_text(
-                "â ÙØ°Ø§ Ø§ÙÙØ³Ù ÙØ®ØµØµ ÙÙØ¥Ø¯Ø§Ø±Ø© ÙÙØ·.",
-                reply_markup=main_keyboard(update.effective_user.id),
-            )
-            return
-        return await func(update, context, *args, **kwargs)
-    return wrapper
-
-
-async def show_main(update, context, text=None):
+async def show_main(update, text=None):
+    user_id = update.effective_user.id
     if text is None:
         text = (
             "ð <b>Ø§ÙÙØ³Ø§Ø¹Ø¯ Ø§ÙØªØ¹ÙÙÙÙ Ø§ÙØ°ÙÙ</b>\n\n"
-            "Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙØ°Ù ØªØ±ÙØ¯ Ø§ÙÙØµÙÙ Ø¥ÙÙÙ ÙÙ ÙÙØ­Ø© Ø§ÙØ£Ø²Ø±Ø§Ø± Ø£Ø¯ÙØ§Ù."
+            "Ø§Ø®ØªØ± ÙÙ Ø§ÙÙØ§Ø¦ÙØ© Ø£Ø¯ÙØ§Ù:"
         )
     await update.effective_message.reply_text(
-        text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=main_keyboard(update.effective_user.id),
+        text, parse_mode=ParseMode.HTML,
+        reply_markup=main_keyboard(user_id)
     )
 
 
-def section_path(section_id):
-    parts = []
-    current = get_section(section_id)
-    while current:
-        parts.append(current["name"])
-        parent = current["parent_id"]
-        current = get_section(parent) if parent else None
-    return "  âº  ".join(reversed(parts))
-
-
-async def show_section(update, context, section_id):
+async def show_section(update, section_id):
     section = get_section(section_id)
     if not section:
-        await show_main(update, context, "â Ø§ÙÙØ³Ù ØºÙØ± ÙÙØ¬ÙØ¯.")
+        await show_main(update, "â Ø§ÙÙØ³Ù ØºÙØ± ÙÙØ¬ÙØ¯.")
         return
 
     user_id = update.effective_user.id
     set_state(user_id, "BROWSE", str(section_id))
 
-    children = get_children(section_id)
-    contents = get_contents(section_id)
+    conn = db()
+    conn.execute(
+        "INSERT INTO visits(user_id,section_id,created_at) VALUES(?,?,?)",
+        (user_id, section_id, datetime.utcnow().isoformat()),
+    )
+    conn.commit()
+    conn.close()
 
-    rows = []
-    for child in children:
-        rows.append([f"ð {child['name']}"])
+    rows = [[f"ð {x['name']}"] for x in get_children(section_id)]
 
-    for content in contents:
-        title = content["title"] or f"ÙØ´Ø§Ø±ÙØ© {content['id']}"
-        rows.append([f"ð {title}"])
+    for c in get_contents(section_id):
+        title = c["title"] or f"ÙØ´Ø§Ø±ÙØ© {c['id']}"
+        rows.append([f"ð {title[:60]}"])
 
-    fav_text = "ð Ø¥Ø²Ø§ÙØ© ÙÙ Ø§ÙÙÙØ¶ÙØ©" if is_favorite(user_id, section_id) else "â­ Ø¥Ø¶Ø§ÙØ© ÙÙÙÙØ¶ÙØ©"
-    rows.append([fav_text])
+    conn = db()
+    fav = conn.execute(
+        "SELECT 1 FROM favorites WHERE user_id=? AND section_id=?",
+        (user_id, section_id),
+    ).fetchone()
+    conn.close()
 
-    # Every level has its own Back and Exit.
+    rows.append(["ð Ø¥Ø²Ø§ÙØ© ÙÙ Ø§ÙÙÙØ¶ÙØ©" if fav else "â­ Ø¥Ø¶Ø§ÙØ© ÙÙÙÙØ¶ÙØ©"])
+
     if section["parent_id"]:
         rows.append(["â¬ï¸ Ø±Ø¬ÙØ¹", "ðª Ø®Ø±ÙØ¬ ÙÙ Ø§ÙÙØ³Ù"])
     else:
@@ -606,758 +578,158 @@ async def show_section(update, context, section_id):
     await update.effective_message.reply_text(
         f"ð <b>{html.escape(section['name'])}</b>\n\n"
         f"ð {html.escape(section_path(section_id))}\n\n"
-        "Ø§Ø®ØªØ± ÙÙ Ø§ÙØ£Ø²Ø±Ø§Ø±:",
+        "Ø§Ø®ØªØ±:",
         parse_mode=ParseMode.HTML,
         reply_markup=kb(rows),
     )
 
 
-async def show_content(update, context, content_id):
+async def show_content(update, content_id):
     conn = db()
-    content = conn.execute(
-        "SELECT * FROM contents WHERE id=?", (content_id,)
-    ).fetchone()
+    c = conn.execute("SELECT * FROM contents WHERE id=?", (content_id,)).fetchone()
     conn.close()
 
-    if not content:
-        await update.effective_message.reply_text(
-            "â Ø§ÙÙØ´Ø§Ø±ÙØ© ØºÙØ± ÙÙØ¬ÙØ¯Ø©.",
-            reply_markup=back_keyboard(),
-        )
+    if not c:
+        await update.effective_message.reply_text("â Ø§ÙÙØ­ØªÙÙ ØºÙØ± ÙÙØ¬ÙØ¯.", reply_markup=back_kb())
         return
 
-    await context.bot.copy_message(
-        chat_id=update.effective_chat.id,
-        from_chat_id=content["source_chat_id"],
-        message_id=content["source_message_id"],
-    )
-
-    section_id = content["section_id"]
     await update.effective_message.reply_text(
-        "â¬ï¸ ÙÙØ±Ø¬ÙØ¹ Ø¥ÙÙ Ø§ÙÙØ³ÙØ Ø§Ø³ØªØ®Ø¯Ù Ø§ÙØ²Ø± Ø£Ø¯ÙØ§Ù.",
-        reply_markup=kb([
-            ["â¬ï¸ Ø±Ø¬ÙØ¹"],
-            ["ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©"],
-        ]),
-    )
-    set_state(update.effective_user.id, "CONTENT", str(section_id))
-
-
-async def notify_new_user(update):
-    user = update.effective_user
-    username = f"@{user.username}" if user.username else "Ø¨Ø¯ÙÙ ÙØ¹Ø±Ù"
-    text = (
-        "ð <b>ÙØ³ØªØ®Ø¯Ù Ø¬Ø¯ÙØ¯ Ø¯Ø®Ù Ø§ÙØ¨ÙØª</b>\n\n"
-        f"ð¤ Ø§ÙØ§Ø³Ù: {html.escape(user.full_name)}\n"
-        f"ð¹ Ø§ÙÙØ¹Ø±Ù: {username}\n"
-        f"ð ID: <code>{user.id}</code>"
-    )
-    try:
-        await application.bot.send_message(
-            ADMIN_ID, text, parse_mode=ParseMode.HTML
-        )
-    except Exception:
-        logger.exception("Could not notify admin")
-
-
-# ============================================================
-# START / MAIN
-# ============================================================
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    new_user = add_user(update.effective_user)
-    clear_state(update.effective_user.id)
-
-    if new_user:
-        await notify_new_user(update)
-
-    await show_main(
-        update,
-        context,
-        "ð <b>Ø£ÙÙØ§Ù Ø¨Ù ÙÙ Ø§ÙÙØ³Ø§Ø¹Ø¯ Ø§ÙØªØ¹ÙÙÙÙ Ø§ÙØ°ÙÙ</b>\n\n"
-        "Ø§Ø®ØªØ± ÙØ§ ØªØ±ÙØ¯ ÙÙ ÙÙØ­Ø© Ø§ÙØ£Ø²Ø±Ø§Ø±.",
-    )
-
-
-async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (update.effective_message.text or "").strip()
-    user_id = update.effective_user.id
-
-    # --------------------------------------------------------
-    # Global navigation
-    # --------------------------------------------------------
-    if text == "ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©":
-        clear_state(user_id)
-        await show_main(update, context)
-        return
-
-    if text in ("â¬ï¸ Ø±Ø¬ÙØ¹", "ðª Ø®Ø±ÙØ¬ ÙÙ Ø§ÙÙØ³Ù"):
-        state = get_state(user_id)
-
-        if state and state["state"] in ("BROWSE", "CONTENT"):
-            try:
-                sid = int(state["value"])
-            except Exception:
-                sid = 0
-
-            section = get_section(sid)
-            if section and section["parent_id"]:
-                await show_section(update, context, section["parent_id"])
-            else:
-                await show_main(update, context)
-        else:
-            await show_main(update, context)
-        return
-
-    # --------------------------------------------------------
-    # Main sections
-    # --------------------------------------------------------
-    if text == "ð Ø§ÙØ£ÙØ³Ø§Ù Ø§ÙØªØ¹ÙÙÙÙØ©":
-        root = get_children(None)
-        # The first root is the educational root created above.
-        if root:
-            await show_section(update, context, root[0]["id"])
-        else:
-            await show_main(update, context, "ÙØ§ ØªÙØ¬Ø¯ Ø£ÙØ³Ø§Ù Ø­Ø§ÙÙØ§Ù.")
-        return
-
-    if text == "â­ Ø§ÙÙÙØ¶ÙØ©":
-        conn = db()
-        rows = conn.execute(
-            """SELECT s.* FROM sections s
-               JOIN favorites f ON f.section_id=s.id
-               WHERE f.user_id=?
-               ORDER BY s.name""",
-            (user_id,),
-        ).fetchall()
-        conn.close()
-
-        if not rows:
-            await update.effective_message.reply_text(
-                "â­ ÙØ§ ØªÙØ¬Ø¯ Ø£ÙØ³Ø§Ù ÙÙ Ø§ÙÙÙØ¶ÙØ©.",
-                reply_markup=main_keyboard(user_id),
-            )
-            return
-
-        await update.effective_message.reply_text(
-            "â­ <b>Ø§ÙÙÙØ¶ÙØ©</b>\n\nØ§Ø®ØªØ± Ø§ÙÙØ³Ù:",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb(
-                [[f"ð {r['name']}"] for r in rows]
-                + [["ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©"]]
-            ),
-        )
-        set_state(user_id, "FAVORITES", "")
-        return
-
-    if text == "ð¥ Ø§ÙØ£ÙØ«Ø± Ø¯Ø®ÙÙØ§Ù":
-        conn = db()
-        rows = conn.execute(
-            """SELECT * FROM users
-               ORDER BY visits DESC LIMIT 10"""
-        ).fetchall()
-        conn.close()
-
-        # Show the user's own visits plus general bot usage.
-        visits = user_visits(user_id)
-        await update.effective_message.reply_text(
-            "ð¥ <b>Ø§ÙØ£ÙØ«Ø± Ø¯Ø®ÙÙØ§Ù</b>\n\n"
-            f"ð Ø¹Ø¯Ø¯ ÙØ±Ø§Øª Ø¯Ø®ÙÙÙ ÙÙØ¨ÙØª: <b>{visits}</b>\n\n"
-            "ÙØ°Ø§ Ø§ÙÙØ³Ù ÙØ®ØµØµ ÙØªØ¬ÙÙØ¹ Ø¥Ø­ØµØ§Ø¦ÙØ§Øª Ø§ÙØ§Ø³ØªØ®Ø¯Ø§Ù.\n"
-            "Ø³ÙØªÙ ØªÙØ³ÙØ¹Ù ÙØ§Ø­ÙØ§Ù ÙÙØ¹Ø±Ø¶ Ø£ÙØ«Ø± Ø§ÙØ£ÙØ³Ø§Ù Ø²ÙØ§Ø±Ø©Ù Ø¨Ø´ÙÙ ÙØ¨Ø§Ø´Ø±.",
-            parse_mode=ParseMode.HTML,
-            reply_markup=back_keyboard(),
-        )
-        return
-
-    if text == "â­ ØªÙÙÙÙ Ø§ÙØ¨ÙØª":
-        await update.effective_message.reply_text(
-            "â­ <b>ÙÙÙÙ Ø§ÙØ¨ÙØª</b>\n\n"
-            "Ø§Ø®ØªØ± ØªÙÙÙÙÙ:",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb([
-                ["â­", "â­â­"],
-                ["â­â­â­", "â­â­â­â­"],
-                ["â­â­â­â­â­"],
-                ["â¬ï¸ Ø±Ø¬ÙØ¹"],
-            ]),
-        )
-        set_state(user_id, "RATING", "")
-        return
-
-    if text == "ð¬ Ø§ÙÙØ±Ø§Ø³ÙØ§Øª":
-        await update.effective_message.reply_text(
-            "ð¬ <b>Ø§ÙÙØ±Ø§Ø³ÙØ§Øª</b>\n\n"
-            "Ø§ÙØªØ¨ Ø±Ø³Ø§ÙØªÙ Ø£Ù ÙÙØ§Ø­Ø¸ØªÙØ ÙØ³ØªØµÙ Ø¥ÙÙ Ø§ÙØ¥Ø¯Ø§Ø±Ø©.",
-            parse_mode=ParseMode.HTML,
-            reply_markup=back_keyboard(),
-        )
-        set_state(user_id, "MESSAGE", "")
-        return
-
-    if text == "â¹ï¸ Ø­ÙÙ Ø§ÙØ¨ÙØª":
-        await update.effective_message.reply_text(
-            "â¹ï¸ <b>Ø­ÙÙ Ø§ÙØ¨ÙØª ÙØ·Ø±ÙÙØ© Ø§ÙØ§Ø³ØªØ®Ø¯Ø§Ù</b>\n\n"
-            "ð <b>Ø§ÙØ£ÙØ³Ø§Ù Ø§ÙØªØ¹ÙÙÙÙØ©:</b>\n"
-            "ØªØ¯Ø®Ù Ø¥ÙÙ Ø§ÙÙØ±Ø­ÙØ© Ø«Ù Ø§ÙÙÙØ±Ø³ Ø«Ù Ø§ÙÙØ§Ø¯Ø© Ø«Ù Ø§ÙÙØ­Ø§Ø¶Ø±Ø©.\n\n"
-            "ð <b>Ø§ÙÙØ´Ø§Ø±ÙØ§Øª:</b>\n"
-            "Ø§ÙÙØ­Ø§Ø¶Ø±Ø© ÙÙÙÙ Ø£Ù ØªÙÙÙ PDF Ø£Ù ØµÙØ±Ø© Ø£Ù ÙÙØ¯ÙÙ Ø£Ù ÙÙÙ Ø£Ù Ø±Ø³Ø§ÙØ© ÙØµÙØ© "
-            "Ø£Ù Ø£Ù ÙØ­ØªÙÙ ÙØ³ÙØ­ Ø§ÙØ¨ÙØª Ø¨ØªØ®Ø²ÙÙÙ.\n\n"
-            "â­ <b>Ø§ÙÙÙØ¶ÙØ©:</b>\n"
-            "Ø£Ø¶Ù Ø£Ù ÙØ³Ù ÙÙÙÙØ¶ÙØ© ÙÙÙØµÙÙ Ø¥ÙÙÙ Ø¨Ø³Ø±Ø¹Ø©.\n\n"
-            "ð¬ <b>Ø§ÙÙØ±Ø§Ø³ÙØ§Øª:</b>\n"
-            "Ø£Ø±Ø³Ù ÙÙØ§Ø­Ø¸Ø© Ø£Ù Ø§Ø³ØªÙØ³Ø§Ø±Ø§Ù ÙÙØ¥Ø¯Ø§Ø±Ø©.\n\n"
-            "â­ <b>Ø§ÙØªÙÙÙÙ:</b>\n"
-            "Ø§Ø®ØªØ± Ø¹Ø¯Ø¯ Ø§ÙÙØ¬ÙÙ Ø«Ù Ø§ÙØªØ¨ ÙÙØ§Ø­Ø¸ØªÙ Ø¥Ù Ø£Ø±Ø¯Øª.\n\n"
-            "ð <b>Ø§ÙØ±Ø¬ÙØ¹ ÙØ§ÙØ®Ø±ÙØ¬:</b>\n"
-            "ÙÙ ÙØ³ØªÙÙ ÙÙ Ø±Ø¬ÙØ¹ Ø®Ø§Øµ Ø¨ÙØ ÙØ§ÙØ®Ø±ÙØ¬ ÙØ¹ÙØ¯Ù Ø¥ÙÙ Ø§ÙÙØ³ØªÙÙ Ø§ÙØ³Ø§Ø¨Ù Ø£Ù Ø§ÙØ±Ø¦ÙØ³ÙØ©.",
-            parse_mode=ParseMode.HTML,
-            reply_markup=back_keyboard(),
-        )
-        return
-
-    if text == "ð ÙÙØ­Ø© Ø§ÙØ¥Ø¯Ø§Ø±Ø©" and user_id == ADMIN_ID:
-        clear_state(user_id)
-        await update.effective_message.reply_text(
-            "ð <b>ÙÙØ­Ø© Ø§ÙØ¥Ø¯Ø§Ø±Ø©</b>\n\n"
-            "Ø§Ø®ØªØ± Ø£Ø¯Ø§Ø©:",
-            parse_mode=ParseMode.HTML,
-            reply_markup=admin_keyboard(),
-        )
-        return
-
-    # --------------------------------------------------------
-    # Rating state
-    # --------------------------------------------------------
-    state = get_state(user_id)
-
-    if state and state["state"] == "RATING":
-        if text.startswith("â­"):
-            rating = text.count("â­")
-            set_state(user_id, "RATING_COMMENT", str(rating))
-            await update.effective_message.reply_text(
-                f"â ØªÙ Ø§Ø®ØªÙØ§Ø± {rating} ÙÙ 5.\n\n"
-                "Ø§ÙØªØ¨ ÙÙØ§Ø­Ø¸ØªÙØ Ø£Ù Ø§ÙØªØ¨ Â«ØªØ®Ø·ÙÂ».",
-                reply_markup=kb([["ØªØ®Ø·Ù"], ["ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©"]]),
-            )
-            return
-
-    if state and state["state"] == "RATING_COMMENT":
-        rating = int(state["value"])
-        comment = "" if text == "ØªØ®Ø·Ù" else text
-        add_rating(user_id, rating, comment)
-        clear_state(user_id)
-
-        await context.bot.send_message(
-            ADMIN_ID,
-            "â­ <b>ØªÙÙÙÙ Ø¬Ø¯ÙØ¯</b>\n\n"
-            f"ð¤ {html.escape(update.effective_user.full_name)}\n"
-            f"ð <code>{user_id}</code>\n"
-            f"â­ Ø§ÙØªÙÙÙÙ: <b>{rating}/5</b>\n"
-            f"ð Ø§ÙÙÙØ§Ø­Ø¸Ø©: {html.escape(comment or 'Ø¨Ø¯ÙÙ ÙÙØ§Ø­Ø¸Ø©')}",
-            parse_mode=ParseMode.HTML,
-        )
-
-        await update.effective_message.reply_text(
-            "â Ø´ÙØ±Ø§Ù ÙØªÙÙÙÙÙ â¤ï¸",
-            reply_markup=main_keyboard(user_id),
-        )
-        return
-
-    # --------------------------------------------------------
-    # User message state
-    # --------------------------------------------------------
-    if state and state["state"] == "MESSAGE":
-        if text:
-            mid = add_message(user_id, text)
-            clear_state(user_id)
-
-            await context.bot.send_message(
-                ADMIN_ID,
-                "ð¬ <b>Ø±Ø³Ø§ÙØ© Ø¬Ø¯ÙØ¯Ø©</b>\n\n"
-                f"Ø±ÙÙ Ø§ÙØ±Ø³Ø§ÙØ©: <code>{mid}</code>\n"
-                f"ð¤ {html.escape(update.effective_user.full_name)}\n"
-                f"ð <code>{user_id}</code>\n\n"
-                f"ð¬ {html.escape(text)}",
-                parse_mode=ParseMode.HTML,
-            )
-
-            await update.effective_message.reply_text(
-                "â ÙØµÙØª Ø±Ø³Ø§ÙØªÙ Ø¥ÙÙ Ø§ÙØ¥Ø¯Ø§Ø±Ø©.",
-                reply_markup=main_keyboard(user_id),
-            )
-            return
-
-    # --------------------------------------------------------
-    # Browse dynamic buttons
-    # --------------------------------------------------------
-    if state and state["state"] in ("BROWSE", "FAVORITES"):
-        if text.startswith("ð "):
-            name = text[2:].strip()
-
-            if state["state"] == "FAVORITES":
-                conn = db()
-                row = conn.execute(
-                    "SELECT * FROM sections WHERE name=? ORDER BY id DESC LIMIT 1",
-                    (name,),
-                ).fetchone()
-                conn.close()
-                if row:
-                    await show_section(update, context, row["id"])
-                    return
-
-            current_id = int(state["value"]) if state["value"] else None
-            candidates = get_children(current_id)
-
-            for child in candidates:
-                if child["name"] == name:
-                    await show_section(update, context, child["id"])
-                    return
-
-        if text.startswith("ð "):
-            title = text[2:].strip()
-            current_id = int(state["value"])
-            for content in get_contents(current_id):
-                if (content["title"] or f"ÙØ´Ø§Ø±ÙØ© {content['id']}") == title:
-                    await show_content(update, context, content["id"])
-                    return
-
-        if text in ("â­ Ø¥Ø¶Ø§ÙØ© ÙÙÙÙØ¶ÙØ©", "ð Ø¥Ø²Ø§ÙØ© ÙÙ Ø§ÙÙÙØ¶ÙØ©"):
-            current_id = int(state["value"])
-            enabled = toggle_favorite(user_id, current_id)
-            await update.effective_message.reply_text(
-                "â­ ØªÙØª Ø§ÙØ¥Ø¶Ø§ÙØ© Ø¥ÙÙ Ø§ÙÙÙØ¶ÙØ©." if enabled else "ð ØªÙØª Ø§ÙØ¥Ø²Ø§ÙØ© ÙÙ Ø§ÙÙÙØ¶ÙØ©.",
-            )
-            await show_section(update, context, current_id)
-            return
-
-    # --------------------------------------------------------
-    # ADMIN
-    # --------------------------------------------------------
-    if user_id == ADMIN_ID:
-        await admin_router(update, context, text)
-        return
-
-    # Unknown
-    await update.effective_message.reply_text(
-        "Ø§Ø³ØªØ®Ø¯Ù Ø£Ø²Ø±Ø§Ø± Ø§ÙØ¨ÙØª ÙÙ ÙÙØ­Ø© Ø§ÙÙÙØ§ØªÙØ­.",
-        reply_markup=main_keyboard(user_id),
-    )
-
-
-# ============================================================
-# ADMIN EDITOR
-# ============================================================
-
-async def admin_router(update, context, text):
-    user_id = update.effective_user.id
-    state = get_state(user_id)
-
-    if text == "ð ÙØ­Ø±Ø± Ø§ÙØ£Ø²Ø±Ø§Ø±":
-        await update.effective_message.reply_text(
-            "ð <b>ÙØ­Ø±Ø± Ø§ÙØ£Ø²Ø±Ø§Ø±</b>\n\n"
-            "Ø§ÙØ£ÙØ³Ø§Ù ÙÙØ³ÙØ§ ÙÙ Ø§ÙØªÙ ØªØ¸ÙØ± ÙØ£Ø²Ø±Ø§Ø± ØªÙÙØ§Ø¦ÙØ§Ù.\n"
-            "ÙÙÙÙÙ Ø§ÙØªØ­ÙÙ Ø¨Ø§ÙØ§Ø³Ù ÙØ§ÙØªØ±ØªÙØ¨ ÙØ§ÙØ¨ÙÙØ© ÙÙ ÙØ­Ø±Ø± Ø§ÙØ£ÙØ³Ø§Ù.\n\n"
-            "Ø§Ø®ØªØ± Ø§ÙØ¹ÙÙÙØ©:",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb([
-                ["ð§© ÙØ­Ø±Ø± Ø§ÙØ£ÙØ³Ø§Ù"],
-                ["â¬ï¸ Ø±Ø¬ÙØ¹"],
-                ["ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©"],
-            ]),
-        )
-        return
-
-    if text == "ð Ø§ÙØ¥Ø­ØµØ§Ø¦ÙØ§Øª":
-        conn = db()
-        users = conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
-        contents = conn.execute("SELECT COUNT(*) c FROM contents").fetchone()["c"]
-        sections = conn.execute("SELECT COUNT(*) c FROM sections").fetchone()["c"]
-        ratings = conn.execute("SELECT COUNT(*) c FROM ratings").fetchone()["c"]
-        messages = conn.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"]
-        conn.close()
-
-        await update.effective_message.reply_text(
-            "ð <b>Ø¥Ø­ØµØ§Ø¦ÙØ§Øª Ø§ÙØ¨ÙØª</b>\n\n"
-            f"ð¥ Ø§ÙÙØ³ØªØ®Ø¯ÙÙÙ: <b>{users}</b>\n"
-            f"ð Ø§ÙØ£ÙØ³Ø§Ù: <b>{sections}</b>\n"
-            f"ð¨ Ø§ÙÙØ´Ø§Ø±ÙØ§Øª: <b>{contents}</b>\n"
-            f"â­ Ø§ÙØªÙÙÙÙØ§Øª: <b>{ratings}</b>\n"
-            f"ð¬ Ø§ÙØ±Ø³Ø§Ø¦Ù: <b>{messages}</b>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=admin_keyboard(),
-        )
-        return
-
-    if text == "ð¬ Ø§ÙÙØ±Ø§Ø³ÙØ§Øª ÙØ§ÙØªÙÙÙÙØ§Øª":
-        conn = db()
-        msgs = conn.execute(
-            "SELECT * FROM messages ORDER BY id DESC LIMIT 10"
-        ).fetchall()
-        ratings = conn.execute(
-            "SELECT * FROM ratings ORDER BY id DESC LIMIT 10"
-        ).fetchall()
-        conn.close()
-
-        out = ["ð¬ <b>Ø¢Ø®Ø± Ø§ÙÙØ±Ø§Ø³ÙØ§Øª ÙØ§ÙØªÙÙÙÙØ§Øª</b>\n"]
-
-        if msgs:
-            out.append("ð¬ <b>Ø§ÙÙØ±Ø§Ø³ÙØ§Øª:</b>")
-            for m in msgs:
-                out.append(
-                    f"#{m['id']} â ID <code>{m['user_id']}</code>\n"
-                    f"{html.escape(m['text'][:300])}"
-                )
-        else:
-            out.append("ð¬ ÙØ§ ØªÙØ¬Ø¯ ÙØ±Ø§Ø³ÙØ§Øª.")
-
-        if ratings:
-            out.append("\nâ­ <b>Ø§ÙØªÙÙÙÙØ§Øª:</b>")
-            for r in ratings:
-                out.append(
-                    f"#{r['id']} â ID <code>{r['user_id']}</code> â "
-                    f"{r['rating']}/5\n"
-                    f"{html.escape((r['comment'] or '')[:300])}"
-                )
-        else:
-            out.append("â­ ÙØ§ ØªÙØ¬Ø¯ ØªÙÙÙÙØ§Øª.")
-
-        await update.effective_message.reply_text(
-            "\n".join(out),
-            parse_mode=ParseMode.HTML,
-            reply_markup=admin_keyboard(),
-        )
-        return
-
-    if text == "ð§© ÙØ­Ø±Ø± Ø§ÙØ£ÙØ³Ø§Ù":
-        clear_state(user_id)
-        await update.effective_message.reply_text(
-            "ð§© <b>ÙØ­Ø±Ø± Ø§ÙØ£ÙØ³Ø§Ù</b>\n\n"
-            "Ø§Ø®ØªØ± Ø§ÙØ¹ÙÙÙØ©:",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb([
-                ["â Ø¥Ø¶Ø§ÙØ© ÙØ³Ù", "âï¸ ØªØ¹Ø¯ÙÙ ÙØ³Ù"],
-                ["ð Ø­Ø°Ù ÙØ³Ù", "âï¸ ÙÙÙ ÙØ³Ù"],
-                ["ð Ø¯ÙØ¬ ÙØ³ÙÙÙ"],
-                ["â¬ï¸ Ø±Ø¬ÙØ¹"],
-            ]),
-        )
-        set_state(user_id, "ADMIN_SECTION_MENU", "")
-        return
-
-    if text == "ð¨ ÙØ­Ø±Ø± Ø§ÙÙØ´Ø§Ø±ÙØ§Øª":
-        await admin_content_editor(update, context)
-        return
-
-    # ---------------- Section editor ----------------
-
-    if text == "â Ø¥Ø¶Ø§ÙØ© ÙØ³Ù":
-        set_state(user_id, "ADMIN_ADD_PARENT", "")
-        roots = get_children(None)
-        await update.effective_message.reply_text(
-            "â Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙØ£Ø¨.\n"
-            "ÙØ¥ÙØ´Ø§Ø¡ ÙØ³Ù Ø±Ø¦ÙØ³Ù Ø§Ø®ØªØ± Â«Ø±Ø¦ÙØ³ÙÂ».",
-            reply_markup=kb(
-                [["ð  Ø±Ø¦ÙØ³Ù"]]
-                + [[f"ð {r['name']}"] for r in roots]
-                + [["â Ø¥ÙØºØ§Ø¡"]]
-            ),
-        )
-        return
-
-    if state and state["state"] == "ADMIN_ADD_PARENT":
-        if text == "â Ø¥ÙØºØ§Ø¡":
-            await admin_section_menu(update)
-            return
-
-        if text == "ð  Ø±Ø¦ÙØ³Ù":
-            set_state(user_id, "ADMIN_ADD_NAME", "0")
-            await update.effective_message.reply_text(
-                "âï¸ Ø£Ø±Ø³Ù Ø§Ø³Ù Ø§ÙÙØ³Ù Ø§ÙØ¬Ø¯ÙØ¯:",
-                reply_markup=ReplyKeyboardRemove(),
-            )
-            return
-
-        if text.startswith("ð "):
-            name = text[2:].strip()
-            roots = get_children(None)
-            for r in roots:
-                if r["name"] == name:
-                    set_state(user_id, "ADMIN_ADD_NAME", str(r["id"]))
-                    await update.effective_message.reply_text(
-                        f"âï¸ Ø£Ø±Ø³Ù Ø§Ø³Ù Ø§ÙÙØ³Ù Ø¯Ø§Ø®Ù Â«{name}Â»:",
-                        reply_markup=ReplyKeyboardRemove(),
-                    )
-                    return
-
-    if state and state["state"] == "ADMIN_ADD_NAME":
-        if text == "â Ø¥ÙØºØ§Ø¡":
-            await admin_section_menu(update)
-            return
-
-        parent_id = int(state["value"]) or None
-        sid = create_section_db(parent_id, text)
-        clear_state(user_id)
-
-        await update.effective_message.reply_text(
-            f"â ØªÙ Ø¥ÙØ´Ø§Ø¡ Ø§ÙÙØ³Ù:\n\nð <b>{html.escape(text)}</b>\n"
-            f"ð ID: <code>{sid}</code>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb([
-                ["ð§© ÙØ­Ø±Ø± Ø§ÙØ£ÙØ³Ø§Ù"],
-                ["ð¨ ÙØ­Ø±Ø± Ø§ÙÙØ´Ø§Ø±ÙØ§Øª"],
-                ["ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©"],
-            ]),
-        )
-        return
-
-    if text == "âï¸ ØªØ¹Ø¯ÙÙ ÙØ³Ù":
-        set_state(user_id, "ADMIN_RENAME_SELECT", "")
-        await send_admin_section_list(
-            update,
-            "âï¸ Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙØ°Ù ØªØ±ÙØ¯ ØªØ¹Ø¯ÙÙ Ø§Ø³ÙÙ:"
-        )
-        return
-
-    if state and state["state"] == "ADMIN_RENAME_SELECT":
-        sid = section_from_button(text)
-        if sid:
-            set_state(user_id, "ADMIN_RENAME_NAME", str(sid))
-            await update.effective_message.reply_text(
-                "âï¸ Ø£Ø±Ø³Ù Ø§ÙØ§Ø³Ù Ø§ÙØ¬Ø¯ÙØ¯:",
-                reply_markup=ReplyKeyboardMarkup(
-                    [["â Ø¥ÙØºØ§Ø¡"]],
-                    resize_keyboard=True,
-                ),
-            )
-            return
-
-    if state and state["state"] == "ADMIN_RENAME_NAME":
-        sid = int(state["value"])
-        if text == "â Ø¥ÙØºØ§Ø¡":
-            await admin_section_menu(update)
-            return
-        rename_section(sid, text)
-        clear_state(user_id)
-        await update.effective_message.reply_text(
-            "â ØªÙ ØªØ¹Ø¯ÙÙ Ø§Ø³Ù Ø§ÙÙØ³Ù.",
-            reply_markup=kb([
-                ["ð§© ÙØ­Ø±Ø± Ø§ÙØ£ÙØ³Ø§Ù"],
-                ["ð¨ ÙØ­Ø±Ø± Ø§ÙÙØ´Ø§Ø±ÙØ§Øª"],
-                ["ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©"],
-            ]),
-        )
-        return
-
-    if text == "ð Ø­Ø°Ù ÙØ³Ù":
-        set_state(user_id, "ADMIN_DELETE_SELECT", "")
-        await send_admin_section_list(
-            update,
-            "ð Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙÙØ±Ø§Ø¯ Ø­Ø°ÙÙ:"
-        )
-        return
-
-    if state and state["state"] == "ADMIN_DELETE_SELECT":
-        sid = section_from_button(text)
-        if sid:
-            section = get_section(sid)
-            set_state(user_id, "ADMIN_DELETE_CONFIRM", str(sid))
-            await update.effective_message.reply_text(
-                "â ï¸ <b>ØªØ£ÙÙØ¯ Ø§ÙØ­Ø°Ù</b>\n\n"
-                f"Ø³ÙØªÙ Ø­Ø°Ù Ø§ÙÙØ³Ù Â«{html.escape(section['name'])}Â» "
-                "ÙÙÙ Ø§ÙØ£ÙØ³Ø§Ù ÙØ§ÙÙØ´Ø§Ø±ÙØ§Øª Ø§ÙÙÙØ¬ÙØ¯Ø© Ø¯Ø§Ø®ÙÙ.\n\n"
-                "ÙÙ Ø£ÙØª ÙØªØ£ÙØ¯Ø",
-                parse_mode=ParseMode.HTML,
-                reply_markup=kb([
-                    ["â ØªØ£ÙÙØ¯ Ø§ÙØ­Ø°Ù"],
-                    ["â Ø¥ÙØºØ§Ø¡"],
-                ]),
-            )
-            return
-
-    if state and state["state"] == "ADMIN_DELETE_CONFIRM":
-        sid = int(state["value"])
-        if text == "â Ø¥ÙØºØ§Ø¡":
-            await admin_section_menu(update)
-            return
-        if text == "â ØªØ£ÙÙØ¯ Ø§ÙØ­Ø°Ù":
-            delete_section_tree(sid)
-            clear_state(user_id)
-            await update.effective_message.reply_text(
-                "â ØªÙ Ø§ÙØ­Ø°Ù Ø¨ÙØ¬Ø§Ø­.",
-                reply_markup=admin_keyboard(),
-            )
-            return
-
-    if text == "âï¸ ÙÙÙ ÙØ³Ù":
-        set_state(user_id, "ADMIN_MOVE_SOURCE", "")
-        await send_admin_section_list(update, "âï¸ Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙÙØ±Ø§Ø¯ ÙÙÙÙ:")
-        return
-
-    if state and state["state"] == "ADMIN_MOVE_SOURCE":
-        sid = section_from_button(text)
-        if sid:
-            set_state(user_id, "ADMIN_MOVE_TARGET", str(sid))
-            await send_admin_section_list(
-                update,
-                "ð Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙØ£Ø¨ Ø§ÙØ¬Ø¯ÙØ¯:"
-            )
-            return
-
-    if state and state["state"] == "ADMIN_MOVE_TARGET":
-        target = section_from_button(text)
-        source = int(state["value"])
-        if target:
-            set_state(
-                user_id,
-                "ADMIN_MOVE_CONFIRM",
-                f"{source}|{target}",
-            )
-            s = get_section(source)
-            t = get_section(target)
-            await update.effective_message.reply_text(
-                "â ï¸ <b>ØªØ£ÙÙØ¯ Ø§ÙÙÙÙ</b>\n\n"
-                f"ÙÙ: <b>{html.escape(s['name'])}</b>\n"
-                f"Ø¥ÙÙ: <b>{html.escape(t['name'])}</b>\n\n"
-                "ØªØ£ÙÙØ¯Ø",
-                parse_mode=ParseMode.HTML,
-                reply_markup=kb([
-                    ["â ØªØ£ÙÙØ¯ Ø§ÙÙÙÙ"],
-                    ["â Ø¥ÙØºØ§Ø¡"],
-                ]),
-            )
-            return
-
-    if state and state["state"] == "ADMIN_MOVE_CONFIRM":
-        source, target = map(int, state["value"].split("|"))
-        if text == "â Ø¥ÙØºØ§Ø¡":
-            await admin_section_menu(update)
-            return
-        if text == "â ØªØ£ÙÙØ¯ Ø§ÙÙÙÙ":
-            ok = move_section(source, target)
-            clear_state(user_id)
-            await update.effective_message.reply_text(
-                "â ØªÙ ÙÙÙ Ø§ÙÙØ³Ù." if ok else "â ØªØ¹Ø°Ø± ÙÙÙ Ø§ÙÙØ³Ù.",
-                reply_markup=admin_keyboard(),
-            )
-            return
-
-    if text == "ð Ø¯ÙØ¬ ÙØ³ÙÙÙ":
-        set_state(user_id, "ADMIN_MERGE_SOURCE", "")
-        await send_admin_section_list(update, "ð Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙÙØµØ¯Ø±:")
-        return
-
-    if state and state["state"] == "ADMIN_MERGE_SOURCE":
-        source = section_from_button(text)
-        if source:
-            set_state(user_id, "ADMIN_MERGE_TARGET", str(source))
-            await send_admin_section_list(update, "ð Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙÙØ¯Ù:")
-            return
-
-    if state and state["state"] == "ADMIN_MERGE_TARGET":
-        target = section_from_button(text)
-        source = int(state["value"])
-        if target:
-            set_state(
-                user_id,
-                "ADMIN_MERGE_CONFIRM",
-                f"{source}|{target}",
-            )
-            s = get_section(source)
-            t = get_section(target)
-            await update.effective_message.reply_text(
-                "â ï¸ <b>ØªØ£ÙÙØ¯ Ø§ÙØ¯ÙØ¬</b>\n\n"
-                f"Ø§ÙÙØµØ¯Ø±: <b>{html.escape(s['name'])}</b>\n"
-                f"Ø§ÙÙØ¯Ù: <b>{html.escape(t['name'])}</b>\n\n"
-                "Ø³ÙØªÙ ÙÙÙ ÙØ­ØªÙÙ Ø§ÙÙØµØ¯Ø± ÙØ£ÙØ³Ø§ÙÙ Ø¥ÙÙ Ø§ÙÙØ¯Ù Ø«Ù Ø­Ø°Ù Ø§ÙÙØµØ¯Ø±.\n\n"
-                "ÙÙ ØªØ±ÙØ¯ Ø§ÙÙØªØ§Ø¨Ø¹Ø©Ø",
-                parse_mode=ParseMode.HTML,
-                reply_markup=kb([
-                    ["â ØªØ£ÙÙØ¯ Ø§ÙØ¯ÙØ¬"],
-                    ["â Ø¥ÙØºØ§Ø¡"],
-                ]),
-            )
-            return
-
-    if state and state["state"] == "ADMIN_MERGE_CONFIRM":
-        source, target = map(int, state["value"].split("|"))
-        if text == "â Ø¥ÙØºØ§Ø¡":
-            await admin_section_menu(update)
-            return
-        if text == "â ØªØ£ÙÙØ¯ Ø§ÙØ¯ÙØ¬":
-            ok = merge_sections(source, target)
-            clear_state(user_id)
-            await update.effective_message.reply_text(
-                "â ØªÙ Ø¯ÙØ¬ Ø§ÙÙØ³ÙÙÙ." if ok else "â ØªØ¹Ø°Ø± Ø§ÙØ¯ÙØ¬.",
-                reply_markup=admin_keyboard(),
-            )
-            return
-
-    # Admin content addition state
-    if state and state["state"] == "ADMIN_CONTENT_SELECT":
-        sid = section_from_button(text)
-        if sid:
-            set_state(user_id, "ADMIN_CONTENT_WAIT", str(sid))
-            await update.effective_message.reply_text(
-                "ð¨ Ø§ÙØ¢Ù Ø£Ø±Ø³Ù Ø£Ù Ø£Ø¹Ø¯ ØªÙØ¬ÙÙ Ø§ÙÙØ´Ø§Ø±ÙØ© Ø¥ÙÙ Ø§ÙØ¨ÙØª.\n\n"
-                "ÙÙÙÙ Ø£Ù ØªÙÙÙ:\n"
-                "ð PDF / ÙÙÙ\n"
-                "ð¼ ØµÙØ±Ø©\n"
-                "ð¥ ÙÙØ¯ÙÙ\n"
-                "ðµ ØµÙØª\n"
-                "ð ÙØµ\n"
-                "ÙØ£Ù ÙÙØ¹ Ø±Ø³Ø§ÙØ© ÙØ¯Ø¹ÙÙ ØªÙÙÙØ¬Ø±Ø§Ù.\n\n"
-                "Ø¨Ø¹Ø¯ Ø§ÙØ¥Ø±Ø³Ø§Ù Ø³ÙØªÙ ØªØ®Ø²ÙÙÙØ§ Ø¯Ø§Ø®Ù Ø§ÙÙØ³Ù ØªÙÙØ§Ø¦ÙØ§Ù.",
-                reply_markup=kb([["â Ø¥ÙØºØ§Ø¡"]]),
-            )
-            return
-
-    if state and state["state"] == "ADMIN_CONTENT_TITLE":
-        # The title is optional and is handled in message_capture.
-        return
-
-    if text == "â Ø¥ÙØºØ§Ø¡":
-        clear_state(user_id)
-        await update.effective_message.reply_text(
-            "â ØªÙ Ø¥ÙØºØ§Ø¡ Ø§ÙØ¹ÙÙÙØ©.",
-            reply_markup=admin_keyboard(),
-        )
-        return
-
-
-async def admin_section_menu(update):
-    clear_state(update.effective_user.id)
-    await update.effective_message.reply_text(
-        "ð§© <b>ÙØ­Ø±Ø± Ø§ÙØ£ÙØ³Ø§Ù</b>\n\nØ§Ø®ØªØ± Ø§ÙØ¹ÙÙÙØ©:",
+        f"ð <b>{html.escape(c['title'] or 'ÙØ­ØªÙÙ')}</b>",
         parse_mode=ParseMode.HTML,
-        reply_markup=kb([
-            ["â Ø¥Ø¶Ø§ÙØ© ÙØ³Ù", "âï¸ ØªØ¹Ø¯ÙÙ ÙØ³Ù"],
-            ["ð Ø­Ø°Ù ÙØ³Ù", "âï¸ ÙÙÙ ÙØ³Ù"],
-            ["ð Ø¯ÙØ¬ ÙØ³ÙÙÙ"],
-            ["â¬ï¸ Ø±Ø¬ÙØ¹"],
-        ]),
+    )
+
+    await telegram_app.bot.copy_message(
+        chat_id=update.effective_chat.id,
+        from_chat_id=c["source_chat_id"],
+        message_id=c["source_message_id"],
+    )
+
+    set_state(update.effective_user.id, "CONTENT", str(c["section_id"]))
+
+
+# ============================================================
+# SEARCH / REFERRALS / BALANCE
+# ============================================================
+
+async def search(update):
+    user_id = update.effective_user.id
+    set_state(user_id, "SEARCH", "")
+    await update.effective_message.reply_text(
+        "ð Ø£Ø±Ø³Ù ÙÙÙØ© Ø§ÙØ¨Ø­Ø«:",
+        reply_markup=kb([["â Ø¥ÙØºØ§Ø¡"], ["ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©"]]),
     )
 
 
-async def send_admin_section_list(update, title):
-    rows = []
+async def do_search(update, query):
     conn = db()
-    sections = conn.execute(
-        "SELECT * FROM sections ORDER BY parent_id, sort_order, id"
+    rows = conn.execute(
+        """SELECT c.*,s.name section_name
+           FROM contents c JOIN sections s ON s.id=c.section_id
+           WHERE c.title LIKE ? OR c.content_type LIKE ?
+           ORDER BY c.id DESC LIMIT 30""",
+        (f"%{query}%", f"%{query}%"),
     ).fetchall()
     conn.close()
 
-    for s in sections:
-        rows.append([f"ð {s['name']}"])
-    rows.append(["â Ø¥ÙØºØ§Ø¡"])
+    if not rows:
+        await update.effective_message.reply_text(
+            "â ÙÙ Ø£Ø¬Ø¯ ÙØªØ§Ø¦Ø¬.", reply_markup=main_keyboard(update.effective_user.id)
+        )
+        return
 
+    buttons = []
+    for r in rows:
+        title = r["title"] or f"ÙØ´Ø§Ø±ÙØ© {r['id']}"
+        buttons.append([f"ð {title[:60]}"])
+    buttons.append(["ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©"])
+
+    set_state(update.effective_user.id, "SEARCH_RESULTS", "")
     await update.effective_message.reply_text(
-        title,
-        reply_markup=kb(rows),
+        f"ð ÙØªØ§Ø¦Ø¬ Ø§ÙØ¨Ø­Ø« Ø¹Ù: <b>{html.escape(query)}</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb(buttons),
     )
 
 
-def section_from_button(text):
+async def referrals(update):
+    me = update.effective_user.id
+    bot = await telegram_app.bot.get_me()
+    link = f"https://t.me/{bot.username}?start=ref_{me}"
+
+    conn = db()
+    count = conn.execute(
+        "SELECT COUNT(*) c FROM users WHERE referrer_id=?", (me,)
+    ).fetchone()["c"]
+    row = conn.execute(
+        "SELECT balance FROM users WHERE user_id=?", (me,)
+    ).fetchone()
+    conn.close()
+
+    await update.effective_message.reply_text(
+        "ð¥ <b>ÙØ¸Ø§Ù Ø§ÙØ¯Ø¹ÙØ§Øª</b>\n\n"
+        f"ð Ø±Ø§Ø¨Ø·Ù:\n<code>{html.escape(link)}</code>\n\n"
+        f"ð¤ Ø¹Ø¯Ø¯ Ø§ÙÙØ¯Ø¹ÙÙÙ: <b>{count}</b>\n"
+        f"ð° Ø±ØµÙØ¯Ù: <b>{row['balance'] if row else 0}</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=back_kb(),
+    )
+
+
+async def balance(update):
+    conn = db()
+    row = conn.execute(
+        "SELECT balance FROM users WHERE user_id=?",
+        (update.effective_user.id,),
+    ).fetchone()
+    conn.close()
+
+    await update.effective_message.reply_text(
+        f"ð° Ø±ØµÙØ¯Ù Ø§ÙØ­Ø§ÙÙ: <b>{row['balance'] if row else 0}</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=back_kb(),
+    )
+
+
+# ============================================================
+# ADMIN
+# ============================================================
+
+def admin_only(func):
+    @wraps(func)
+    async def wrapper(update, context, *args, **kwargs):
+        if update.effective_user.id != ADMIN_ID:
+            await update.effective_message.reply_text("â ØºÙØ± ÙØ³ÙÙØ­.")
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapper
+
+
+async def admin_panel(update):
+    clear_state(update.effective_user.id)
+    await update.effective_message.reply_text(
+        "ð <b>ÙÙØ­Ø© Ø§ÙØ¥Ø¯Ø§Ø±Ø©</b>\n\nØ§Ø®ØªØ±:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_kb(),
+    )
+
+
+async def send_section_list(update, title, state):
+    rows = [[f"ð {s['name']}"] for s in all_sections()]
+    rows.append(["â Ø¥ÙØºØ§Ø¡"])
+    set_state(update.effective_user.id, state, "")
+    await update.effective_message.reply_text(title, reply_markup=kb(rows))
+
+
+def all_sections():
+    conn = db()
+    rows = conn.execute(
+        "SELECT * FROM sections ORDER BY parent_id,sort_order,id"
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def section_by_button(text):
     if not text.startswith("ð "):
         return None
     name = text[2:].strip()
@@ -1370,10 +742,24 @@ def section_from_button(text):
     return row["id"] if row else None
 
 
-async def admin_content_editor(update, context):
+async def section_editor(update):
+    set_state(update.effective_user.id, "ADMIN_SECTION_MENU", "")
     await update.effective_message.reply_text(
-        "ð¨ <b>ÙØ­Ø±Ø± Ø§ÙÙØ´Ø§Ø±ÙØ§Øª</b>\n\n"
-        "Ø§Ø®ØªØ± Ø§ÙØ¹ÙÙÙØ©:",
+        "ð§© <b>ÙØ­Ø±Ø± Ø§ÙØ£ÙØ³Ø§Ù</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb([
+            ["â Ø¥Ø¶Ø§ÙØ© ÙØ³Ù", "âï¸ ØªØ¹Ø¯ÙÙ ÙØ³Ù"],
+            ["ð Ø­Ø°Ù ÙØ³Ù", "âï¸ ÙÙÙ ÙØ³Ù"],
+            ["ð Ø¯ÙØ¬ ÙØ³ÙÙÙ"],
+            ["â¬ï¸ Ø±Ø¬ÙØ¹"],
+        ]),
+    )
+
+
+async def admin_content_editor(update):
+    set_state(update.effective_user.id, "ADMIN_CONTENT_MENU", "")
+    await update.effective_message.reply_text(
+        "ð¨ <b>ÙØ­Ø±Ø± Ø§ÙÙØ´Ø§Ø±ÙØ§Øª</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=kb([
             ["â Ø¥Ø¶Ø§ÙØ© ÙØ´Ø§Ø±ÙØ©"],
@@ -1382,11 +768,665 @@ async def admin_content_editor(update, context):
             ["â¬ï¸ Ø±Ø¬ÙØ¹"],
         ]),
     )
-    set_state(update.effective_user.id, "ADMIN_CONTENT_MENU", "")
+
+
+async def statistics(update):
+    conn = db()
+    users = conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
+    active = conn.execute(
+        "SELECT COUNT(*) c FROM users WHERE last_seen>=?",
+        ((datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)).isoformat(),),
+    ).fetchone()["c"]
+    sections = conn.execute("SELECT COUNT(*) c FROM sections").fetchone()["c"]
+    contents = conn.execute("SELECT COUNT(*) c FROM contents").fetchone()["c"]
+    ratings = conn.execute("SELECT COUNT(*) c FROM ratings").fetchone()["c"]
+    messages = conn.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"]
+    banned = conn.execute("SELECT COUNT(*) c FROM users WHERE banned=1").fetchone()["c"]
+    conn.close()
+
+    await update.effective_message.reply_text(
+        "ð <b>Ø¥Ø­ØµØ§Ø¦ÙØ§Øª Ø§ÙØ¨ÙØª</b>\n\n"
+        f"ð¥ Ø§ÙÙØ³ØªØ®Ø¯ÙÙÙ: <b>{users}</b>\n"
+        f"ð¢ ÙØ´Ø·ÙÙ Ø§ÙÙÙÙ: <b>{active}</b>\n"
+        f"ð Ø§ÙØ£ÙØ³Ø§Ù: <b>{sections}</b>\n"
+        f"ð¨ Ø§ÙÙØ´Ø§Ø±ÙØ§Øª: <b>{contents}</b>\n"
+        f"â­ Ø§ÙØªÙÙÙÙØ§Øª: <b>{ratings}</b>\n"
+        f"ð¬ Ø§ÙØ±Ø³Ø§Ø¦Ù: <b>{messages}</b>\n"
+        f"ð« Ø§ÙÙØ­Ø¸ÙØ±ÙÙ: <b>{banned}</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_kb(),
+    )
+
+
+async def broadcast(update):
+    set_state(update.effective_user.id, "BROADCAST", "")
+    await update.effective_message.reply_text(
+        "ð¢ Ø£Ø±Ø³Ù Ø§ÙØ¢Ù Ø§ÙØ±Ø³Ø§ÙØ© Ø§ÙØªÙ ØªØ±ÙØ¯ Ø¥Ø±Ø³Ø§ÙÙØ§ ÙÙØ¬ÙÙØ¹.\n"
+        "ÙÙÙÙ Ø£Ù ØªÙÙÙ ÙØµÙØ§ Ø£Ù ØµÙØ±Ø© Ø£Ù ÙÙÙÙØ§ Ø£Ù ÙÙØ¯ÙÙ.\n\n"
+        "ÙÙØ¥ÙØºØ§Ø¡: â Ø¥ÙØºØ§Ø¡",
+        reply_markup=kb([["â Ø¥ÙØºØ§Ø¡"]]),
+    )
+
+
+async def execute_broadcast(update):
+    conn = db()
+    users = conn.execute("SELECT user_id FROM users WHERE banned=0").fetchall()
+    conn.close()
+
+    ok = 0
+    fail = 0
+
+    for row in users:
+        try:
+            await update.effective_message.copy(row["user_id"])
+            ok += 1
+        except Exception:
+            fail += 1
+
+    await update.effective_message.reply_text(
+        f"ð¢ Ø§ÙØªÙÙØª Ø§ÙØ¥Ø°Ø§Ø¹Ø©.\n\nâ ÙØ¬Ø­: {ok}\nâ ÙØ´Ù: {fail}",
+        reply_markup=admin_kb(),
+    )
+
+
+async def admin_users(update):
+    conn = db()
+    rows = conn.execute(
+        "SELECT user_id,first_name,username,banned,balance FROM users ORDER BY last_seen DESC LIMIT 30"
+    ).fetchall()
+    conn.close()
+
+    lines = ["ð¥ <b>Ø¢Ø®Ø± Ø§ÙÙØ³ØªØ®Ø¯ÙÙÙ</b>\n"]
+    for r in rows:
+        name = html.escape(r["first_name"] or "Ø¨Ø¯ÙÙ Ø§Ø³Ù")
+        username = f"@{r['username']}" if r["username"] else "-"
+        status = "ð«" if r["banned"] else "ð¢"
+        lines.append(
+            f"{status} <code>{r['user_id']}</code> â {name} â {username} â ð° {r['balance']}"
+        )
+
+    await update.effective_message.reply_text(
+        "\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_kb(),
+    )
 
 
 # ============================================================
-# MESSAGE CAPTURE
+# MAIN MESSAGE ROUTER
+# ============================================================
+
+async def route(update, context):
+    if not update.effective_message:
+        return
+
+    user = update.effective_user
+    if not user:
+        return
+
+    if is_banned(user.id) and user.id != ADMIN_ID:
+        await update.effective_message.reply_text("ð« ØªÙ Ø­Ø¸Ø± Ø­Ø³Ø§Ø¨Ù ÙÙ Ø§Ø³ØªØ®Ø¯Ø§Ù Ø§ÙØ¨ÙØª.")
+        return
+
+    text = (update.effective_message.text or "").strip()
+    state = get_state(user.id)
+
+    # Broadcast/media capture must run before normal routing.
+    if user.id == ADMIN_ID and state and state["state"] == "BROADCAST":
+        if text == "â Ø¥ÙØºØ§Ø¡":
+            clear_state(user.id)
+            await admin_panel(update)
+        else:
+            clear_state(user.id)
+            await execute_broadcast(update)
+        return
+
+    # Admin add-content capture.
+    if user.id == ADMIN_ID and state and state["state"] == "ADMIN_CONTENT_WAIT":
+        if text == "â Ø¥ÙØºØ§Ø¡":
+            clear_state(user.id)
+            await admin_content_editor(update)
+            return
+
+        sid = int(state["value"])
+        ctype = detect_content_type(update.effective_message)
+        title = default_title(update.effective_message, ctype)
+        cid = add_content(
+            sid,
+            update.effective_chat.id,
+            update.effective_message.message_id,
+            ctype,
+            title,
+        )
+        clear_state(user.id)
+        await update.effective_message.reply_text(
+            f"â ØªÙ Ø­ÙØ¸ Ø§ÙÙØ´Ø§Ø±ÙØ©.\n\nð Ø§ÙÙØ³Ù: {html.escape(get_section(sid)['name'])}\n"
+            f"ð Ø§ÙØ¹ÙÙØ§Ù: {html.escape(title)}\nð ID: <code>{cid}</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_kb(),
+        )
+        return
+
+    # Search input.
+    if state and state["state"] == "SEARCH":
+        if text == "â Ø¥ÙØºØ§Ø¡":
+            clear_state(user.id)
+            await show_main(update)
+            return
+        await do_search(update, text)
+        return
+
+    # Rating.
+    if state and state["state"] == "RATING":
+        if text.startswith("â­"):
+            rating = min(5, text.count("â­"))
+            set_state(user.id, "RATING_COMMENT", str(rating))
+            await update.effective_message.reply_text(
+                f"â Ø§Ø®ØªØ±Øª {rating}/5.\nØ£Ø±Ø³Ù ÙÙØ§Ø­Ø¸ØªÙ Ø£Ù Ø§ÙØªØ¨ Â«ØªØ®Ø·ÙÂ».",
+                reply_markup=kb([["ØªØ®Ø·Ù"], ["ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©"]]),
+            )
+        return
+
+    if state and state["state"] == "RATING_COMMENT":
+        rating = int(state["value"])
+        comment = "" if text == "ØªØ®Ø·Ù" else text
+        add_rating(user.id, rating, comment)
+        clear_state(user.id)
+        try:
+            await telegram_app.bot.send_message(
+                ADMIN_ID,
+                f"â­ <b>ØªÙÙÙÙ Ø¬Ø¯ÙØ¯</b>\n\n"
+                f"ð¤ {html.escape(user.full_name)}\n"
+                f"ð <code>{user.id}</code>\n"
+                f"â­ {rating}/5\n"
+                f"ð {html.escape(comment or 'Ø¨Ø¯ÙÙ ÙÙØ§Ø­Ø¸Ø©')}",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+        await update.effective_message.reply_text(
+            "â Ø´ÙØ±ÙØ§ ÙØªÙÙÙÙÙ â¤ï¸",
+            reply_markup=main_keyboard(user.id),
+        )
+        return
+
+    # User support message.
+    if state and state["state"] == "MESSAGE":
+        if text:
+            mid = add_message(user.id, text)
+            clear_state(user.id)
+            try:
+                await telegram_app.bot.send_message(
+                    ADMIN_ID,
+                    f"ð¬ <b>Ø±Ø³Ø§ÙØ© Ø¬Ø¯ÙØ¯Ø© #{mid}</b>\n\n"
+                    f"ð¤ {html.escape(user.full_name)}\n"
+                    f"ð <code>{user.id}</code>\n\n"
+                    f"{html.escape(text)}",
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception:
+                pass
+            await update.effective_message.reply_text(
+                "â ÙØµÙØª Ø±Ø³Ø§ÙØªÙ Ø¥ÙÙ Ø§ÙØ¥Ø¯Ø§Ø±Ø©.",
+                reply_markup=main_keyboard(user.id),
+            )
+        return
+
+    # Admin states.
+    if user.id == ADMIN_ID:
+        if await admin_state_router(update, context, state, text):
+            return
+
+    # Global navigation.
+    if text in ("ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©", "/start"):
+        clear_state(user.id)
+        await show_main(update)
+        return
+
+    if text in ("â¬ï¸ Ø±Ø¬ÙØ¹", "ðª Ø®Ø±ÙØ¬ ÙÙ Ø§ÙÙØ³Ù"):
+        if state and state["state"] in ("BROWSE", "CONTENT"):
+            sid = int(state["value"])
+            sec = get_section(sid)
+            if sec and sec["parent_id"]:
+                await show_section(update, sec["parent_id"])
+            else:
+                await show_main(update)
+        else:
+            await show_main(update)
+        return
+
+    # Main menu.
+    if text == "ð Ø§ÙØ£ÙØ³Ø§Ù Ø§ÙØªØ¹ÙÙÙÙØ©":
+        roots = get_children(None)
+        if roots:
+            await show_section(update, roots[0]["id"])
+        else:
+            await show_main(update, "â ÙØ§ ØªÙØ¬Ø¯ Ø£ÙØ³Ø§Ù.")
+        return
+
+    if text == "ð Ø§ÙØ¨Ø­Ø«":
+        await search(update)
+        return
+
+    if text == "â­ Ø§ÙÙÙØ¶ÙØ©":
+        conn = db()
+        rows = conn.execute(
+            """SELECT s.* FROM sections s JOIN favorites f
+               ON f.section_id=s.id WHERE f.user_id=? ORDER BY s.name""",
+            (user.id,),
+        ).fetchall()
+        conn.close()
+
+        if not rows:
+            await update.effective_message.reply_text(
+                "â­ ÙØ§ ØªÙØ¬Ø¯ Ø£ÙØ³Ø§Ù ÙÙØ¶ÙØ©.",
+                reply_markup=main_keyboard(user.id),
+            )
+        else:
+            set_state(user.id, "FAVORITES", "")
+            await update.effective_message.reply_text(
+                "â­ <b>Ø§ÙÙÙØ¶ÙØ©</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=kb(
+                    [[f"ð {r['name']}"] for r in rows]
+                    + [["ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©"]]
+                ),
+            )
+        return
+
+    if text == "ð¥ Ø§ÙØ£ÙØ«Ø± Ø¯Ø®ÙÙØ§Ù":
+        conn = db()
+        rows = conn.execute(
+            """SELECT s.name,COUNT(v.id) n FROM visits v
+               JOIN sections s ON s.id=v.section_id
+               GROUP BY v.section_id ORDER BY n DESC LIMIT 10"""
+        ).fetchall()
+        conn.close()
+
+        msg = "ð¥ <b>Ø§ÙØ£ÙØ«Ø± Ø¯Ø®ÙÙØ§Ù</b>\n\n"
+        msg += "\n".join(
+            f"{i+1}. {html.escape(r['name'])} â {r['n']} Ø²ÙØ§Ø±Ø©"
+            for i, r in enumerate(rows)
+        ) if rows else "ÙØ§ ØªÙØ¬Ø¯ Ø¨ÙØ§ÙØ§Øª Ø¨Ø¹Ø¯."
+
+        await update.effective_message.reply_text(
+            msg, parse_mode=ParseMode.HTML, reply_markup=back_kb()
+        )
+        return
+
+    if text == "ð¬ Ø§ÙÙØ±Ø§Ø³ÙØ§Øª":
+        set_state(user.id, "MESSAGE", "")
+        await update.effective_message.reply_text(
+            "ð¬ Ø§ÙØªØ¨ Ø±Ø³Ø§ÙØªÙ Ø£Ù Ø§Ø³ØªÙØ³Ø§Ø±Ù ÙØ³Ø£Ø±Ø³ÙÙ Ø¥ÙÙ Ø§ÙØ¥Ø¯Ø§Ø±Ø©.",
+            reply_markup=back_kb(),
+        )
+        return
+
+    if text == "â­ ØªÙÙÙÙ Ø§ÙØ¨ÙØª":
+        set_state(user.id, "RATING", "")
+        await update.effective_message.reply_text(
+            "â­ Ø§Ø®ØªØ± ØªÙÙÙÙÙ:",
+            reply_markup=kb([
+                ["â­", "â­â­"],
+                ["â­â­â­", "â­â­â­â­"],
+                ["â­â­â­â­â­"],
+                ["â¬ï¸ Ø±Ø¬ÙØ¹"],
+            ]),
+        )
+        return
+
+    if text == "â¹ï¸ Ø­ÙÙ Ø§ÙØ¨ÙØª":
+        await update.effective_message.reply_text(
+            get_setting("about"),
+            parse_mode=ParseMode.HTML,
+            reply_markup=back_kb(),
+        )
+        return
+
+    if text == "ð¥ Ø§ÙØ¯Ø¹ÙØ§Øª":
+        await referrals(update)
+        return
+
+    if text == "ð° Ø±ØµÙØ¯Ù":
+        await balance(update)
+        return
+
+    # Browse dynamic buttons.
+    if state and state["state"] in ("BROWSE", "FAVORITES", "SEARCH_RESULTS"):
+        if text.startswith("ð "):
+            sid = section_by_button(text)
+            if sid:
+                await show_section(update, sid)
+                return
+
+        if text.startswith("ð "):
+            title = text[2:].strip()
+            conn = db()
+            rows = conn.execute(
+                "SELECT id,section_id,title FROM contents WHERE title=? ORDER BY id DESC",
+                (title,),
+            ).fetchall()
+            conn.close()
+            if rows:
+                await show_content(update, rows[0]["id"])
+                return
+
+        if text in ("â­ Ø¥Ø¶Ø§ÙØ© ÙÙÙÙØ¶ÙØ©", "ð Ø¥Ø²Ø§ÙØ© ÙÙ Ø§ÙÙÙØ¶ÙØ©"):
+            sid = int(state["value"])
+            enabled = toggle_favorite(user.id, sid)
+            await show_section(update, sid)
+            return
+
+    if user.id == ADMIN_ID and text == "ð ÙÙØ­Ø© Ø§ÙØ¥Ø¯Ø§Ø±Ø©":
+        await admin_panel(update)
+        return
+
+    await update.effective_message.reply_text(
+        "Ø§Ø³ØªØ®Ø¯Ù Ø£Ø²Ø±Ø§Ø± Ø§ÙØ¨ÙØª ÙÙ Ø§ÙÙØ§Ø¦ÙØ©.",
+        reply_markup=main_keyboard(user.id),
+    )
+
+
+# ============================================================
+# ADMIN STATE ROUTER
+# ============================================================
+
+async def admin_state_router(update, context, state, text):
+    user_id = update.effective_user.id
+
+    if text == "ð ÙÙØ­Ø© Ø§ÙØ¥Ø¯Ø§Ø±Ø©":
+        await admin_panel(update)
+        return True
+
+    if text == "ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©":
+        clear_state(user_id)
+        await show_main(update)
+        return True
+
+    if text == "â¬ï¸ Ø±Ø¬ÙØ¹":
+        clear_state(user_id)
+        await admin_panel(update)
+        return True
+
+    if text == "ð§© ÙØ­Ø±Ø± Ø§ÙØ£ÙØ³Ø§Ù":
+        await section_editor(update)
+        return True
+
+    if text == "ð¨ ÙØ­Ø±Ø± Ø§ÙÙØ´Ø§Ø±ÙØ§Øª":
+        await admin_content_editor(update)
+        return True
+
+    if text == "ð¢ Ø¥Ø±Ø³Ø§Ù Ø¬ÙØ§Ø¹Ù":
+        await broadcast(update)
+        return True
+
+    if text == "ð Ø§ÙØ¥Ø­ØµØ§Ø¦ÙØ§Øª":
+        await statistics(update)
+        return True
+
+    if text == "ð¥ Ø¥Ø¯Ø§Ø±Ø© Ø§ÙÙØ³ØªØ®Ø¯ÙÙÙ":
+        await admin_users(update)
+        return True
+
+    if text == "ð ØªØ¹Ø¯ÙÙ Ø­ÙÙ Ø§ÙØ¨ÙØª":
+        set_state(user_id, "ADMIN_ABOUT", "")
+        await update.effective_message.reply_text(
+            "ð Ø£Ø±Ø³Ù Ø§ÙÙØµ Ø§ÙØ¬Ø¯ÙØ¯ ÙÙØ³Ù Â«Ø­ÙÙ Ø§ÙØ¨ÙØªÂ».",
+            reply_markup=kb([["â Ø¥ÙØºØ§Ø¡"]]),
+        )
+        return True
+
+    if state and state["state"] == "ADMIN_ABOUT":
+        if text == "â Ø¥ÙØºØ§Ø¡":
+            clear_state(user_id)
+            await admin_panel(update)
+        else:
+            set_setting("about", text)
+            clear_state(user_id)
+            await update.effective_message.reply_text(
+                "â ØªÙ ØªØ­Ø¯ÙØ« ÙØ³Ù Ø­ÙÙ Ø§ÙØ¨ÙØª.",
+                reply_markup=admin_kb(),
+            )
+        return True
+
+    if text == "âï¸ Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª Ø§ÙØ¨ÙØª":
+        await update.effective_message.reply_text(
+            "âï¸ <b>Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª Ø§ÙØ¨ÙØª</b>\n\n"
+            "â¢ ADMIN_ID ÙØ¶Ø¨ÙØ· Ø¯Ø§Ø®Ù Ø§ÙÙÙØ¯/Render\n"
+            "â¢ WEBHOOK_URL ÙÙ Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª Render\n"
+            "â¢ ÙØ§Ø¹Ø¯Ø© Ø§ÙØ¨ÙØ§ÙØ§Øª SQLite\n"
+            "â¢ Ø§ÙØ£ÙØ³Ø§Ù ÙØ§ÙÙÙØ±Ø³ ØªØªØ­Ø¯Ø« ØªÙÙØ§Ø¦ÙÙØ§",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_kb(),
+        )
+        return True
+
+    if text == "â Ø¥Ø¶Ø§ÙØ© ÙØ³Ù":
+        set_state(user_id, "ADD_PARENT", "")
+        roots = get_children(None)
+        await update.effective_message.reply_text(
+            "â Ø§Ø®ØªØ± Ø§ÙØ£Ø¨Ø Ø£Ù Â«ð  Ø±Ø¦ÙØ³ÙÂ» ÙÙØ³Ù Ø±Ø¦ÙØ³Ù:",
+            reply_markup=kb(
+                [["ð  Ø±Ø¦ÙØ³Ù"]] + [[f"ð {x['name']}"] for x in roots] + [["â Ø¥ÙØºØ§Ø¡"]]
+            ),
+        )
+        return True
+
+    if state and state["state"] == "ADD_PARENT":
+        if text == "â Ø¥ÙØºØ§Ø¡":
+            await section_editor(update)
+            return True
+        if text == "ð  Ø±Ø¦ÙØ³Ù":
+            set_state(user_id, "ADD_NAME", "0")
+            await update.effective_message.reply_text(
+                "âï¸ Ø£Ø±Ø³Ù Ø§Ø³Ù Ø§ÙÙØ³Ù Ø§ÙØ¬Ø¯ÙØ¯:",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            return True
+        sid = section_by_button(text)
+        if sid:
+            set_state(user_id, "ADD_NAME", str(sid))
+            await update.effective_message.reply_text(
+                "âï¸ Ø£Ø±Ø³Ù Ø§Ø³Ù Ø§ÙÙØ³Ù Ø§ÙØ¬Ø¯ÙØ¯:",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            return True
+
+    if state and state["state"] == "ADD_NAME":
+        if text:
+            sid = create_section(int(state["value"]) or None, text)
+            clear_state(user_id)
+            await update.effective_message.reply_text(
+                f"â ØªÙ Ø¥ÙØ´Ø§Ø¡ Ø§ÙÙØ³Ù.\nð <code>{sid}</code>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=admin_kb(),
+            )
+        return True
+
+    if text == "âï¸ ØªØ¹Ø¯ÙÙ ÙØ³Ù":
+        await send_section_list(update, "âï¸ Ø§Ø®ØªØ± Ø§ÙÙØ³Ù:", "RENAME_SELECT")
+        return True
+
+    if state and state["state"] == "RENAME_SELECT":
+        sid = section_by_button(text)
+        if sid:
+            set_state(user_id, "RENAME_NAME", str(sid))
+            await update.effective_message.reply_text("âï¸ Ø£Ø±Ø³Ù Ø§ÙØ§Ø³Ù Ø§ÙØ¬Ø¯ÙØ¯:")
+        return True
+
+    if state and state["state"] == "RENAME_NAME":
+        rename_section(int(state["value"]), text)
+        clear_state(user_id)
+        await update.effective_message.reply_text("â ØªÙ ØªØ¹Ø¯ÙÙ Ø§ÙÙØ³Ù.", reply_markup=admin_kb())
+        return True
+
+    if text == "ð Ø­Ø°Ù ÙØ³Ù":
+        await send_section_list(update, "ð Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙÙØ±Ø§Ø¯ Ø­Ø°ÙÙ:", "DELETE_SELECT")
+        return True
+
+    if state and state["state"] == "DELETE_SELECT":
+        sid = section_by_button(text)
+        if sid:
+            set_state(user_id, "DELETE_CONFIRM", str(sid))
+            await update.effective_message.reply_text(
+                "â ï¸ Ø³ÙØªÙ Ø­Ø°Ù Ø§ÙÙØ³Ù ÙØ¬ÙÙØ¹ ÙØ­ØªÙØ§Ù.\nÙÙ ØªØ¤ÙØ¯Ø",
+                reply_markup=kb([["â ØªØ£ÙÙØ¯ Ø§ÙØ­Ø°Ù"], ["â Ø¥ÙØºØ§Ø¡"]]),
+            )
+        return True
+
+    if state and state["state"] == "DELETE_CONFIRM":
+        if text == "â Ø¥ÙØºØ§Ø¡":
+            await section_editor(update)
+            return True
+        if text == "â ØªØ£ÙÙØ¯ Ø§ÙØ­Ø°Ù":
+            delete_section_tree(int(state["value"]))
+            clear_state(user_id)
+            await update.effective_message.reply_text(
+                "â ØªÙ Ø§ÙØ­Ø°Ù.", reply_markup=admin_kb()
+            )
+        return True
+
+    if text == "âï¸ ÙÙÙ ÙØ³Ù":
+        await send_section_list(update, "âï¸ Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙÙØ±Ø§Ø¯ ÙÙÙÙ:", "MOVE_SOURCE")
+        return True
+
+    if state and state["state"] == "MOVE_SOURCE":
+        sid = section_by_button(text)
+        if sid:
+            set_state(user_id, "MOVE_TARGET", str(sid))
+            await send_section_list(update, "ð Ø§Ø®ØªØ± Ø§ÙØ£Ø¨ Ø§ÙØ¬Ø¯ÙØ¯:", "MOVE_TARGET")
+        return True
+
+    if state and state["state"] == "MOVE_TARGET":
+        target = section_by_button(text)
+        if target:
+            source = int(state["value"])
+            ok = move_section(source, target)
+            clear_state(user_id)
+            await update.effective_message.reply_text(
+                "â ØªÙ Ø§ÙÙÙÙ." if ok else "â ÙØ§ ÙÙÙÙ ÙÙÙ Ø§ÙÙØ³Ù Ø¥ÙÙ Ø¯Ø§Ø®ÙÙ.",
+                reply_markup=admin_kb(),
+            )
+        return True
+
+    if text == "ð Ø¯ÙØ¬ ÙØ³ÙÙÙ":
+        await send_section_list(update, "ð Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙÙØµØ¯Ø±:", "MERGE_SOURCE")
+        return True
+
+    if state and state["state"] == "MERGE_SOURCE":
+        sid = section_by_button(text)
+        if sid:
+            set_state(user_id, "MERGE_TARGET", str(sid))
+            await send_section_list(update, "ð Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙÙØ¯Ù:", "MERGE_TARGET")
+        return True
+
+    if state and state["state"] == "MERGE_TARGET":
+        target = section_by_button(text)
+        if target:
+            source = int(state["value"])
+            if source == target or target in descendants(source):
+                clear_state(user_id)
+                await update.effective_message.reply_text(
+                    "â ÙØ§ ÙÙÙÙ Ø¯ÙØ¬ ÙØ°Ø§ Ø§ÙÙØ³Ù Ø¨ÙØ°Ø§ Ø§ÙÙØ¯Ù.", reply_markup=admin_kb()
+                )
+                return True
+
+            conn = db()
+            conn.execute("UPDATE sections SET parent_id=? WHERE parent_id=?", (target, source))
+            conn.execute("UPDATE contents SET section_id=? WHERE section_id=?", (target, source))
+            conn.execute("DELETE FROM favorites WHERE section_id=?", (source,))
+            conn.execute("DELETE FROM sections WHERE id=?", (source,))
+            conn.commit()
+            conn.close()
+            clear_state(user_id)
+            await update.effective_message.reply_text(
+                "â ØªÙ Ø§ÙØ¯ÙØ¬.", reply_markup=admin_kb()
+            )
+        return True
+
+    if text == "â Ø¥Ø¶Ø§ÙØ© ÙØ´Ø§Ø±ÙØ©":
+        await send_section_list(update, "ð Ø§Ø®ØªØ± Ø§ÙÙØ³Ù:", "CONTENT_SELECT")
+        return True
+
+    if state and state["state"] == "CONTENT_SELECT":
+        sid = section_by_button(text)
+        if sid:
+            set_state(user_id, "ADMIN_CONTENT_WAIT", str(sid))
+            await update.effective_message.reply_text(
+                "ð¨ Ø£Ø±Ø³Ù Ø§ÙØ¢Ù Ø§ÙÙÙÙ/Ø§ÙØµÙØ±Ø©/Ø§ÙÙÙØ¯ÙÙ/Ø§ÙÙØµ ÙÙØªÙ Ø­ÙØ¸Ù Ø¯Ø§Ø®Ù Ø§ÙÙØ³Ù.",
+                reply_markup=kb([["â Ø¥ÙØºØ§Ø¡"]]),
+            )
+        return True
+
+    if text == "ð Ø­Ø°Ù ÙØ´Ø§Ø±ÙØ©":
+        await send_section_list(update, "ð Ø§Ø®ØªØ± Ø§ÙÙØ³Ù:", "CONTENT_DELETE_SECTION")
+        return True
+
+    if state and state["state"] == "CONTENT_DELETE_SECTION":
+        sid = section_by_button(text)
+        if sid:
+            rows = get_contents(sid)
+            if not rows:
+                await update.effective_message.reply_text(
+                    "ÙØ§ ØªÙØ¬Ø¯ ÙØ´Ø§Ø±ÙØ§Øª.", reply_markup=admin_kb()
+                )
+                clear_state(user_id)
+                return True
+            set_state(user_id, "CONTENT_DELETE", str(sid))
+            await update.effective_message.reply_text(
+                "ð Ø§Ø®ØªØ± Ø§ÙÙØ´Ø§Ø±ÙØ©:",
+                reply_markup=kb(
+                    [[f"ð {c['title'] or f'ÙØ´Ø§Ø±ÙØ© {c['id']}'}"] for c in rows]
+                    + [["â Ø¥ÙØºØ§Ø¡"]]
+                ),
+            )
+        return True
+
+    if state and state["state"] == "CONTENT_DELETE":
+        sid = int(state["value"])
+        if text.startswith("ð "):
+            title = text[2:].strip()
+            for c in get_contents(sid):
+                if (c["title"] or f"ÙØ´Ø§Ø±ÙØ© {c['id']}") == title:
+                    delete_content(c["id"])
+                    clear_state(user_id)
+                    await update.effective_message.reply_text(
+                        "â ØªÙ Ø­Ø°Ù Ø§ÙÙØ´Ø§Ø±ÙØ©.", reply_markup=admin_kb()
+                    )
+                    return True
+        return True
+
+    if text == "ð Ø¹Ø±Ø¶ ÙØ´Ø§Ø±ÙØ§Øª Ø§ÙÙØ³Ù":
+        await send_section_list(update, "ð Ø§Ø®ØªØ± Ø§ÙÙØ³Ù:", "CONTENT_LIST")
+        return True
+
+    if state and state["state"] == "CONTENT_LIST":
+        sid = section_by_button(text)
+        if sid:
+            rows = get_contents(sid)
+            if rows:
+                msg = "\n".join(
+                    f"ð {html.escape(c['title'] or f'ÙØ´Ø§Ø±ÙØ© {c['id']}')} â {c['content_type']}"
+                    for c in rows
+                )
+            else:
+                msg = "ÙØ§ ØªÙØ¬Ø¯ ÙØ´Ø§Ø±ÙØ§Øª."
+            clear_state(user_id)
+            await update.effective_message.reply_text(
+                msg, parse_mode=ParseMode.HTML, reply_markup=admin_kb()
+            )
+        return True
+
+    if text == "â Ø¥ÙØºØ§Ø¡":
+        clear_state(user_id)
+        await admin_panel(update)
+        return True
+
+    return False
+
+
+# ============================================================
+# CONTENT HELPERS
 # ============================================================
 
 def detect_content_type(message):
@@ -1409,300 +1449,132 @@ def detect_content_type(message):
     return "other"
 
 
-def default_title(message, content_type):
+def default_title(message, ctype):
     if message.document and message.document.file_name:
         return message.document.file_name
     if message.caption:
         return message.caption[:80]
-    if content_type == "photo":
-        return "ØµÙØ±Ø©"
-    if content_type == "video":
-        return "ÙÙØ¯ÙÙ"
-    if content_type == "audio":
-        return "ØµÙØª"
-    if content_type == "voice":
-        return "Ø±Ø³Ø§ÙØ© ØµÙØªÙØ©"
-    if content_type == "animation":
-        return "ÙØªØ­Ø±Ù"
-    if content_type == "sticker":
-        return "ÙÙØµÙ"
-    if content_type == "text":
-        return (message.text or "ÙØµ")[:80]
-    return "ÙØ´Ø§Ø±ÙØ©"
-
-
-async def message_capture(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_message:
-        return
-
-    user_id = update.effective_user.id
-    add_user(update.effective_user)
-
-    state = get_state(user_id)
-
-    # Admin content receiving: the next arbitrary message is stored.
-    if user_id == ADMIN_ID and state and state["state"] == "ADMIN_CONTENT_WAIT":
-        if update.effective_message.text == "â Ø¥ÙØºØ§Ø¡":
-            clear_state(user_id)
-            await update.effective_message.reply_text(
-                "â ØªÙ Ø§ÙØ¥ÙØºØ§Ø¡.",
-                reply_markup=admin_keyboard(),
-            )
-            return
-
-        section_id = int(state["value"])
-        msg = update.effective_message
-        ctype = detect_content_type(msg)
-        title = default_title(msg, ctype)
-
-        cid = add_content(
-            section_id,
-            update.effective_chat.id,
-            msg.message_id,
-            ctype,
-            title,
-        )
-
-        clear_state(user_id)
-
-        await update.effective_message.reply_text(
-            "â <b>ØªÙ Ø­ÙØ¸ Ø§ÙÙØ´Ø§Ø±ÙØ©</b>\n\n"
-            f"ð Ø§ÙÙØ³Ù: <b>{html.escape(get_section(section_id)['name'])}</b>\n"
-            f"ð Ø§ÙØ¹ÙÙØ§Ù: <b>{html.escape(title)}</b>\n"
-            f"ð¹ Ø§ÙÙÙØ¹: <b>{ctype}</b>\n"
-            f"ð Ø§ÙÙØ´Ø§Ø±ÙØ©: <code>{cid}</code>\n\n"
-            "ÙÙÙÙ ÙÙÙØ³ØªØ®Ø¯Ù Ø§ÙØ¢Ù Ø§ÙØ¶ØºØ· Ø¹ÙÙ Ø§Ø³ÙÙØ§ ÙÙØªÙ Ø¥Ø±Ø³Ø§Ù Ø§ÙÙØ­ØªÙÙ ÙÙØ³Ù.",
-            parse_mode=ParseMode.HTML,
-            reply_markup=admin_keyboard(),
-        )
-        return
-
-    # Normal text is routed through menu_handler.
-    await menu_handler(update, context)
+    return {
+        "photo": "ØµÙØ±Ø©",
+        "video": "ÙÙØ¯ÙÙ",
+        "audio": "ØµÙØª",
+        "voice": "Ø±Ø³Ø§ÙØ© ØµÙØªÙØ©",
+        "animation": "ÙØªØ­Ø±Ù",
+        "sticker": "ÙÙØµÙ",
+        "text": (message.text or "ÙØµ")[:80],
+    }.get(ctype, "ÙØ´Ø§Ø±ÙØ©")
 
 
 # ============================================================
-# ADMIN CONTENT COMMANDS VIA MENU
+# COMMANDS
 # ============================================================
 
-async def admin_command_router(update, context):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    await admin_content_editor(update, context)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ref = None
+    if context.args:
+        arg = context.args[0]
+        if arg.startswith("ref_"):
+            try:
+                ref = int(arg[4:])
+            except ValueError:
+                ref = None
 
+    new_user = add_user(update.effective_user, ref)
+    clear_state(update.effective_user.id)
 
-# Patch content editor choices into menu handler through a small
-# wrapper that runs before the generic admin router.
-_original_menu_handler = menu_handler
-
-
-async def enhanced_menu_handler(update, context):
-    text = (update.effective_message.text or "").strip()
-    user_id = update.effective_user.id
-    state = get_state(user_id)
-
-    # Admin content editor actions.
-    if user_id == ADMIN_ID:
-        if text == "â Ø¥Ø¶Ø§ÙØ© ÙØ´Ø§Ø±ÙØ©":
-            set_state(user_id, "ADMIN_CONTENT_SELECT", "")
-            await send_admin_section_list(
-                update,
-                "ð Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙØ°Ù Ø³ØªÙØ­ÙØ¸ Ø¯Ø§Ø®ÙÙ Ø§ÙÙØ´Ø§Ø±ÙØ©:",
+    if new_user and ref and ref != update.effective_user.id:
+        try:
+            conn = db()
+            conn.execute(
+                "UPDATE users SET balance=balance+1 WHERE user_id=?",
+                (ref,),
             )
-            return
+            conn.commit()
+            conn.close()
+        except Exception:
+            logger.exception("Referral reward failed")
 
-        if text == "ð Ø­Ø°Ù ÙØ´Ø§Ø±ÙØ©":
-            set_state(user_id, "ADMIN_CONTENT_DELETE_SECTION", "")
-            await send_admin_section_list(
-                update,
-                "ð Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙØ°Ù ØªØ­ØªÙÙ ÙØ´Ø§Ø±ÙØªÙ Ø¹ÙÙ Ø§ÙØ­Ø°Ù:",
-            )
-            return
+    await show_main(
+        update,
+        "ð <b>Ø£ÙÙØ§Ù Ø¨Ù ÙÙ Ø§ÙÙØ³Ø§Ø¹Ø¯ Ø§ÙØªØ¹ÙÙÙÙ Ø§ÙØ°ÙÙ</b>\n\n"
+        "Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø£Ù Ø§Ø³ØªØ®Ø¯Ù Ø§ÙØ¨Ø­Ø« ÙÙÙØµÙÙ Ø¥ÙÙ Ø§ÙÙØ­Ø§Ø¶Ø±Ø§Øª ÙØ§ÙÙÙÙØ§Øª.",
+    )
 
-        if state and state["state"] == "ADMIN_CONTENT_DELETE_SECTION":
-            sid = section_from_button(text)
-            if sid:
-                contents = get_contents(sid)
-                if not contents:
-                    await update.effective_message.reply_text(
-                        "ÙØ§ ØªÙØ¬Ø¯ ÙØ´Ø§Ø±ÙØ§Øª Ø¯Ø§Ø®Ù ÙØ°Ø§ Ø§ÙÙØ³Ù.",
-                        reply_markup=admin_keyboard(),
-                    )
-                    return
-                set_state(user_id, "ADMIN_CONTENT_DELETE_SELECT", str(sid))
-                await update.effective_message.reply_text(
-                    "ð Ø§Ø®ØªØ± Ø§ÙÙØ´Ø§Ø±ÙØ©:",
-                    reply_markup=kb([
-                        [f"ð {c['title'] or f'ÙØ´Ø§Ø±ÙØ© {c['id']}'}"]
-                        for c in contents
-                    ] + [["â Ø¥ÙØºØ§Ø¡"]]),
-                )
-                return
 
-        if state and state["state"] == "ADMIN_CONTENT_DELETE_SELECT":
-            sid = int(state["value"])
-            if text.startswith("ð "):
-                title = text[2:].strip()
-                for c in get_contents(sid):
-                    if (c["title"] or f"ÙØ´Ø§Ø±ÙØ© {c['id']}") == title:
-                        set_state(
-                            user_id,
-                            "ADMIN_CONTENT_DELETE_CONFIRM",
-                            str(c["id"]),
-                        )
-                        await update.effective_message.reply_text(
-                            "â ï¸ ØªØ£ÙÙØ¯ Ø­Ø°Ù Ø§ÙÙØ´Ø§Ø±ÙØ©Ø",
-                            reply_markup=kb([
-                                ["â ØªØ£ÙÙØ¯ Ø§ÙØ­Ø°Ù"],
-                                ["â Ø¥ÙØºØ§Ø¡"],
-                            ]),
-                        )
-                        return
-
-        if state and state["state"] == "ADMIN_CONTENT_DELETE_CONFIRM":
-            cid = int(state["value"])
-            if text == "â Ø¥ÙØºØ§Ø¡":
-                clear_state(user_id)
-                await update.effective_message.reply_text(
-                    "â ØªÙ Ø§ÙØ¥ÙØºØ§Ø¡.",
-                    reply_markup=admin_keyboard(),
-                )
-                return
-            if text == "â ØªØ£ÙÙØ¯ Ø§ÙØ­Ø°Ù":
-                delete_content(cid)
-                clear_state(user_id)
-                await update.effective_message.reply_text(
-                    "â ØªÙ Ø­Ø°Ù Ø§ÙÙØ´Ø§Ø±ÙØ©.",
-                    reply_markup=admin_keyboard(),
-                )
-                return
-
-        if text == "ð Ø¹Ø±Ø¶ ÙØ´Ø§Ø±ÙØ§Øª Ø§ÙÙØ³Ù":
-            set_state(user_id, "ADMIN_CONTENT_LIST_SECTION", "")
-            await send_admin_section_list(
-                update,
-                "ð Ø§Ø®ØªØ± Ø§ÙÙØ³Ù:",
-            )
-            return
-
-        if state and state["state"] == "ADMIN_CONTENT_LIST_SECTION":
-            sid = section_from_button(text)
-            if sid:
-                contents = get_contents(sid)
-                if not contents:
-                    msg = "ÙØ§ ØªÙØ¬Ø¯ ÙØ´Ø§Ø±ÙØ§Øª."
-                else:
-                    lines = [
-                        f"ð {c['title'] or f'ÙØ´Ø§Ø±ÙØ© {c['id']}'} â {c['content_type']}"
-                        for c in contents
-                    ]
-                    msg = "\n".join(lines)
-
-                await update.effective_message.reply_text(
-                    f"ð <b>{html.escape(get_section(sid)['name'])}</b>\n\n"
-                    + msg,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=admin_keyboard(),
-                )
-                clear_state(user_id)
-                return
-
-    await _original_menu_handler(update, context)
+async def admin_command(update, context):
+    if update.effective_user.id == ADMIN_ID:
+        await admin_panel(update)
+    else:
+        await update.effective_message.reply_text("â ØºÙØ± ÙØ³ÙÙØ­.")
 
 
 # ============================================================
-# FLASK / WEBHOOK
+# FLASK WEBHOOK
 # ============================================================
 
-@app.get("/")
+@flask_app.get("/")
 def health():
-    return "Telegram bot is running", 200
+    return "Telegram Educational Bot is running", 200
 
 
-@app.post(f"/{WEBHOOK_PATH}")
-def telegram_webhook():
-    global application
-
-    if application is None:
+@flask_app.post("/" + WEBHOOK_PATH)
+def webhook():
+    if telegram_app is None:
         return "Application not ready", 503
 
     try:
-        update = Update.de_json(request.get_json(force=True), application.bot)
-        application.update_queue.put_nowait(update)
+        data = request.get_json(force=True)
+        update = Update.de_json(data, telegram_app.bot)
+        telegram_app.update_queue.put_nowait(update)
         return "OK", 200
     except Exception:
-        logger.exception("Webhook update error")
+        logger.exception("Webhook error")
         return "Bad Request", 400
 
 
-async def post_init(app_obj):
-    global application
-    application = app_obj
+async def init_telegram():
+    global telegram_app
 
-    if WEBHOOK_URL:
-        full_url = WEBHOOK_URL.rstrip("/") + "/" + WEBHOOK_PATH
-        await app_obj.bot.set_webhook(url=full_url)
-        logger.info("Webhook set: %s", full_url)
-
-
-async def post_shutdown(app_obj):
-    try:
-        await app_obj.bot.delete_webhook(drop_pending_updates=False)
-    except Exception:
-        logger.exception("Could not delete webhook")
-
-
-def build_application():
-    global application
-
-    builder = (
+    telegram_app = (
         Application.builder()
         .token(BOT_TOKEN)
-        .post_init(post_init)
-        .post_shutdown(post_shutdown)
+        .build()
     )
 
-    application = builder.build()
-
-    application.add_handler(CommandHandler("start", start))
-
-    # Commands.
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(r"^/admin$"),
-            lambda update, context: enhanced_menu_handler(update, context),
-        )
+    telegram_app.add_handler(CommandHandler("start", start))
+    telegram_app.add_handler(CommandHandler("admin", admin_command))
+    telegram_app.add_handler(
+        MessageHandler(filters.ALL & ~filters.COMMAND, route)
     )
 
-    # Any message, including arbitrary media.
-    application.add_handler(
-        MessageHandler(
-            filters.ALL & ~filters.COMMAND,
-            message_capture,
-        )
-    )
+    await telegram_app.initialize()
+    await telegram_app.start()
 
-    return application
+    if WEBHOOK_URL:
+        url = WEBHOOK_URL.rstrip("/") + "/" + WEBHOOK_PATH
+        await telegram_app.bot.set_webhook(url=url, drop_pending_updates=False)
+        logger.info("Webhook set to %s", url)
 
 
-def run():
-    init_db()
-    bot_app = build_application()
+def telegram_thread():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(init_telegram())
+    loop.run_forever()
 
-    # Run the Telegram application in the background so Flask can serve
-    # the webhook. This avoids polling and therefore avoids the
-    # "Conflict: terminated by other getUpdates request" error.
-    bot_app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=WEBHOOK_PATH,
-        webhook_url=(
-            WEBHOOK_URL.rstrip("/") + "/" + WEBHOOK_PATH
-            if WEBHOOK_URL else None
-        ),
-        drop_pending_updates=False,
-    )
 
+# ============================================================
+# RUN
+# ============================================================
 
 if __name__ == "__main__":
-    run()
+    init_db()
+
+    t = threading.Thread(target=telegram_thread, daemon=True)
+    t.start()
+
+    flask_app.run(
+        host="0.0.0.0",
+        port=PORT,
+        threaded=True,
+    )

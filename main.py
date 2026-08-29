@@ -1,2865 +1,3693 @@
+# ============================================================
+# Telegram Educational Bot - Complete Edition
+# Python 3.11+
+# python-telegram-bot 21+
+# ============================================================
+
 import os
 import sqlite3
+import secrets
+import html
 import logging
-from contextlib import closing
+from datetime import datetime
 
-from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
+from telegram.constants import ParseMode
 from telegram.ext import (
-    ApplicationBuilder,
+    Application,
     CommandHandler,
+    CallbackQueryHandler,
     MessageHandler,
     ContextTypes,
     filters,
 )
 
-# =========================================================
+# ============================================================
 # CONFIG
-# =========================================================
+# ============================================================
 
-# ضع التوكن في Environment Variables باسم BOT_TOKEN
-TOKEN = os.getenv("BOT_TOKEN", "").strip()
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
-# آيدي الأدمن الرئيسي
+# Admin ID requested
 ADMIN_ID = 5734654153
 
 DB_NAME = "bot.db"
 
+PORT = int(os.getenv("PORT", "10000"))
+RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+
+WEBHOOK_SECRET = os.getenv(
+    "WEBHOOK_SECRET",
+    secrets.token_urlsafe(32)
+)
+
 logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
 )
 
-# =========================================================
-# TEXT
-# =========================================================
+logger = logging.getLogger(__name__)
 
-START_TEXT = (
-    "👋 أهلاً وسهلاً بك في المنصة التعليمية\n\n"
-    "📚 اختر القسم المطلوب من القائمة أدناه:"
-)
 
-ABOUT_TEXT = (
-    "ℹ️ حول البوت\n\n"
-    "منصة تعليمية لتنظيم المواد والمحاضرات "
-    "والملخصات والملفات والأسئلة."
-)
+if not BOT_TOKEN:
+    raise RuntimeError(
+        "BOT_TOKEN غير موجود. أضفه في Environment Variables في Render."
+    )
 
-# =========================================================
+
+# ============================================================
 # DATABASE
-# =========================================================
+# ============================================================
 
-def get_db():
-    return sqlite3.connect(DB_NAME)
+def db_connect():
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
 
 
-def init_db():
+def db_init():
+    conn = db_connect()
+    cur = conn.cursor()
 
-    with closing(get_db()) as conn:
-
-        c = conn.cursor()
-
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS users(
-                user_id INTEGER PRIMARY KEY,
-                first_name TEXT,
-                username TEXT,
-                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS admins(
-                user_id INTEGER PRIMARY KEY
-            )
-        """)
-
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS settings(
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-        """)
-
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS buttons(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                parent_id INTEGER NOT NULL DEFAULT 0,
-                title TEXT NOT NULL,
-                position INTEGER NOT NULL DEFAULT 0,
-                category TEXT NOT NULL DEFAULT 'main'
-            )
-        """)
-
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS posts(
-                button_id INTEGER PRIMARY KEY,
-                content_type TEXT NOT NULL,
-                file_id TEXT,
-                text_content TEXT,
-                caption TEXT
-            )
-        """)
-
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS favorites(
-                user_id INTEGER,
-                button_id INTEGER,
-                PRIMARY KEY(user_id, button_id)
-            )
-        """)
-
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS visits(
-                button_id INTEGER PRIMARY KEY,
-                count INTEGER NOT NULL DEFAULT 0
-            )
-        """)
-
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS messages(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                button_id INTEGER,
-                kind TEXT,
-                content TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS ratings(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                rating INTEGER,
-                note TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS news(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT,
-                content TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS channels(
-                chat_id TEXT PRIMARY KEY,
-                title TEXT,
-                username TEXT
-            )
-        """)
-
-        c.execute(
-            "INSERT OR IGNORE INTO admins(user_id) VALUES(?)",
-            (ADMIN_ID,)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            last_name TEXT,
+            joined_at TEXT NOT NULL,
+            last_seen TEXT NOT NULL
         )
+    """)
 
-        defaults = {
-            "maintenance": "0",
-            "start_text": START_TEXT,
-            "about_text": ABOUT_TEXT,
-        }
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_id INTEGER,
+            name TEXT NOT NULL,
+            icon TEXT DEFAULT '📁',
+            sort_order INTEGER DEFAULT 0,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(parent_id) REFERENCES sections(id)
+                ON DELETE CASCADE
+        )
+    """)
 
-        for key, value in defaults.items():
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS contents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            section_id INTEGER NOT NULL,
+            source_chat_id INTEGER NOT NULL,
+            source_message_id INTEGER NOT NULL,
+            content_type TEXT DEFAULT 'unknown',
+            sort_order INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(section_id) REFERENCES sections(id)
+                ON DELETE CASCADE
+        )
+    """)
 
-            c.execute(
-                """
-                INSERT OR IGNORE
-                INTO settings(key,value)
-                VALUES(?,?)
-                """,
-                (key, value)
-            )
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS favorites (
+            user_id INTEGER NOT NULL,
+            section_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(user_id, section_id),
+            FOREIGN KEY(section_id) REFERENCES sections(id)
+                ON DELETE CASCADE
+        )
+    """)
 
-        conn.commit()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS visits (
+            user_id INTEGER NOT NULL,
+            section_id INTEGER NOT NULL,
+            count INTEGER DEFAULT 0,
+            last_visit TEXT,
+            PRIMARY KEY(user_id, section_id),
+            FOREIGN KEY(section_id) REFERENCES sections(id)
+                ON DELETE CASCADE
+        )
+    """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS ratings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            rating INTEGER NOT NULL,
+            comment TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
 
-init_db()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            section_id INTEGER,
+            text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(section_id) REFERENCES sections(id)
+                ON DELETE SET NULL
+        )
+    """)
 
-# =========================================================
-# SETTINGS
-# =========================================================
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
 
-def get_setting(key, default=""):
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS system_buttons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            button_key TEXT UNIQUE NOT NULL,
+            label TEXT NOT NULL,
+            icon TEXT DEFAULT '🔘',
+            sort_order INTEGER DEFAULT 0,
+            enabled INTEGER DEFAULT 1,
+            admin_only INTEGER DEFAULT 0
+        )
+    """)
 
-    with closing(get_db()) as conn:
+    conn.commit()
 
-        row = conn.execute(
-            """
-            SELECT value
-            FROM settings
-            WHERE key=?
-            """,
-            (key,)
-        ).fetchone()
+    # --------------------------------------------------------
+    # DEFAULT SETTINGS
+    # --------------------------------------------------------
 
-        return row[0] if row else default
+    defaults = {
+        "welcome_enabled": "1",
+        "new_user_notifications": "1",
+        "rating_enabled": "1",
+        "notes_enabled": "1",
+    }
 
-
-def set_setting(key, value):
-
-    with closing(get_db()) as conn:
-
-        conn.execute(
-            """
-            INSERT OR REPLACE
-            INTO settings(key,value)
-            VALUES(?,?)
-            """,
+    for key, value in defaults.items():
+        cur.execute(
+            "INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)",
             (key, value)
         )
 
+    # --------------------------------------------------------
+    # DEFAULT SYSTEM BUTTONS
+    # --------------------------------------------------------
+
+    system_buttons = [
+        ("favorites", "المفضلة", "⭐", 10, 1, 0),
+        ("popular", "الأكثر دخولاً", "📊", 20, 1, 0),
+        ("rating", "تقييم البوت", "⭐", 30, 1, 0),
+        ("about", "حول البوت", "ℹ️", 40, 1, 0),
+        ("contact", "مراسلة الإدارة", "✉️", 50, 1, 0),
+        ("admin", "لوحة الإدارة", "🔐", 100, 1, 1),
+    ]
+
+    for item in system_buttons:
+        cur.execute("""
+            INSERT OR IGNORE INTO system_buttons
+            (button_key,label,icon,sort_order,enabled,admin_only)
+            VALUES (?,?,?,?,?,?)
+        """, item)
+
+    conn.commit()
+
+    # --------------------------------------------------------
+    # DEFAULT SECTIONS
+    # --------------------------------------------------------
+
+    count = cur.execute(
+        "SELECT COUNT(*) FROM sections"
+    ).fetchone()[0]
+
+    if count == 0:
+        now = datetime.now().isoformat()
+
+        cur.execute("""
+            INSERT INTO sections
+            (parent_id,name,icon,sort_order,enabled,created_at)
+            VALUES (NULL,?,?,?,?,?)
+        """, (0, "المرحلة الأولى", "🎓", 1, now))
+
+        stage1 = cur.lastrowid
+
+        cur.execute("""
+            INSERT INTO sections
+            (parent_id,name,icon,sort_order,enabled,created_at)
+            VALUES (?,?,?,?,?,?)
+        """, (
+            stage1,
+            "الكورس الأول",
+            "📚",
+            1,
+            1,
+            now,
+        ))
+
+        course1 = cur.lastrowid
+
+        cur.execute("""
+            INSERT INTO sections
+            (parent_id,name,icon,sort_order,enabled,created_at)
+            VALUES (?,?,?,?,?,?)
+        """, (
+            stage1,
+            "الكورس الثاني",
+            "📚",
+            2,
+            1,
+            now,
+        ))
+
+        course2 = cur.lastrowid
+
+        # مواد افتراضية
+        subjects1 = [
+            ("رياضيات", "📐"),
+            ("برمجة", "💻"),
+            ("دوائر كهربائية", "⚡"),
+            ("أساسيات الحاسوب", "🖥️"),
+        ]
+
+        subjects2 = [
+            ("الرياضيات", "📐"),
+            ("البرمجة", "💻"),
+            ("الإلكترونيات", "🔌"),
+        ]
+
+        for index, (name, icon) in enumerate(subjects1, 1):
+            cur.execute("""
+                INSERT INTO sections
+                (parent_id,name,icon,sort_order,enabled,created_at)
+                VALUES (?,?,?,?,?,?)
+            """, (
+                course1,
+                name,
+                icon,
+                index,
+                1,
+                now,
+            ))
+
+        for index, (name, icon) in enumerate(subjects2, 1):
+            cur.execute("""
+                INSERT INTO sections
+                (parent_id,name,icon,sort_order,enabled,created_at)
+                VALUES (?,?,?,?,?,?)
+            """, (
+                course2,
+                name,
+                icon,
+                index,
+                1,
+                now,
+            ))
+
         conn.commit()
 
-# =========================================================
-# USERS
-# =========================================================
+    conn.close()
 
-def save_user(user):
 
-    with closing(get_db()) as conn:
+# ============================================================
+# HELPERS
+# ============================================================
 
-        old = conn.execute(
-            """
-            SELECT 1
-            FROM users
-            WHERE user_id=?
-            """,
-            (user.id,)
-        ).fetchone()
+def now():
+    return datetime.now().isoformat()
 
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO users(
-                user_id,
-                first_name,
-                username
+
+def bold(text):
+    return f"<b>{html.escape(str(text))}</b>"
+
+
+def get_setting(key, default="0"):
+    conn = db_connect()
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key=?",
+        (key,)
+    ).fetchone()
+    conn.close()
+
+    if not row:
+        return default
+
+    return row["value"]
+
+
+def set_setting(key, value):
+    conn = db_connect()
+    conn.execute("""
+        INSERT INTO settings(key,value)
+        VALUES (?,?)
+        ON CONFLICT(key)
+        DO UPDATE SET value=excluded.value
+    """, (key, str(value)))
+    conn.commit()
+    conn.close()
+
+
+def is_admin(user_id):
+    return int(user_id) == ADMIN_ID
+
+
+def add_user(user):
+    conn = db_connect()
+
+    exists = conn.execute(
+        "SELECT user_id FROM users WHERE user_id=?",
+        (user.id,)
+    ).fetchone()
+
+    first = not bool(exists)
+
+    conn.execute("""
+        INSERT INTO users
+        (user_id,username,first_name,last_name,joined_at,last_seen)
+        VALUES (?,?,?,?,?,?)
+        ON CONFLICT(user_id)
+        DO UPDATE SET
+            username=excluded.username,
+            first_name=excluded.first_name,
+            last_name=excluded.last_name,
+            last_seen=excluded.last_seen
+    """, (
+        user.id,
+        user.username or "",
+        user.first_name or "",
+        user.last_name or "",
+        now(),
+        now(),
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return first
+
+
+def get_section(section_id):
+    conn = db_connect()
+    row = conn.execute(
+        "SELECT * FROM sections WHERE id=?",
+        (section_id,)
+    ).fetchone()
+    conn.close()
+    return row
+
+
+def get_children(parent_id):
+    conn = db_connect()
+
+    if parent_id is None:
+        rows = conn.execute("""
+            SELECT *
+            FROM sections
+            WHERE parent_id IS NULL
+              AND enabled=1
+            ORDER BY sort_order,id
+        """).fetchall()
+    else:
+        rows = conn.execute("""
+            SELECT *
+            FROM sections
+            WHERE parent_id=?
+              AND enabled=1
+            ORDER BY sort_order,id
+        """, (parent_id,)).fetchall()
+
+    conn.close()
+    return rows
+
+
+def get_all_children(parent_id):
+    conn = db_connect()
+
+    if parent_id is None:
+        rows = conn.execute("""
+            SELECT *
+            FROM sections
+            WHERE parent_id IS NULL
+            ORDER BY sort_order,id
+        """).fetchall()
+    else:
+        rows = conn.execute("""
+            SELECT *
+            FROM sections
+            WHERE parent_id=?
+            ORDER BY sort_order,id
+        """, (parent_id,)).fetchall()
+
+    conn.close()
+    return rows
+
+
+def get_contents(section_id):
+    conn = db_connect()
+    rows = conn.execute("""
+        SELECT *
+        FROM contents
+        WHERE section_id=?
+        ORDER BY sort_order,id
+    """, (section_id,)).fetchall()
+    conn.close()
+    return rows
+
+
+def section_has_children(section_id):
+    conn = db_connect()
+    value = conn.execute(
+        "SELECT COUNT(*) FROM sections WHERE parent_id=?",
+        (section_id,)
+    ).fetchone()[0]
+    conn.close()
+    return value > 0
+
+
+def section_has_contents(section_id):
+    conn = db_connect()
+    value = conn.execute(
+        "SELECT COUNT(*) FROM contents WHERE section_id=?",
+        (section_id,)
+    ).fetchone()[0]
+    conn.close()
+    return value > 0
+
+
+def default_icon(name):
+    name = name.lower()
+
+    if "رياض" in name:
+        return "📐"
+    if "برمج" in name:
+        return "💻"
+    if "حاسوب" in name:
+        return "🖥️"
+    if "كهرب" in name:
+        return "⚡"
+    if "إلكتر" in name:
+        return "🔌"
+    if "محاض" in name:
+        return "📖"
+    if "كورس" in name:
+        return "📚"
+    if "ملخص" in name:
+        return "📝"
+    if "مرحلة" in name:
+        return "🎓"
+
+    return "📁"
+
+
+def get_path(section_id):
+    path = []
+    current = get_section(section_id)
+
+    while current:
+        path.append(current["name"])
+        parent_id = current["parent_id"]
+
+        if parent_id is None:
+            break
+
+        current = get_section(parent_id)
+
+    path.reverse()
+    return path
+
+
+def path_text(section_id):
+    path = get_path(section_id)
+    return "  ›  ".join(path)
+
+
+def record_visit(user_id, section_id):
+    conn = db_connect()
+
+    conn.execute("""
+        INSERT INTO visits(user_id,section_id,count,last_visit)
+        VALUES (?,?,1,?)
+        ON CONFLICT(user_id,section_id)
+        DO UPDATE SET
+            count=count+1,
+            last_visit=excluded.last_visit
+    """, (
+        user_id,
+        section_id,
+        now(),
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+def is_favorite(user_id, section_id):
+    conn = db_connect()
+
+    row = conn.execute("""
+        SELECT 1
+        FROM favorites
+        WHERE user_id=? AND section_id=?
+    """, (user_id, section_id)).fetchone()
+
+    conn.close()
+    return bool(row)
+
+
+def toggle_favorite(user_id, section_id):
+    conn = db_connect()
+
+    exists = conn.execute("""
+        SELECT 1
+        FROM favorites
+        WHERE user_id=? AND section_id=?
+    """, (user_id, section_id)).fetchone()
+
+    if exists:
+        conn.execute("""
+            DELETE FROM favorites
+            WHERE user_id=? AND section_id=?
+        """, (user_id, section_id))
+        result = False
+    else:
+        conn.execute("""
+            INSERT INTO favorites
+            (user_id,section_id,created_at)
+            VALUES (?,?,?)
+        """, (user_id, section_id, now()))
+        result = True
+
+    conn.commit()
+    conn.close()
+
+    return result
+
+
+# ============================================================
+# KEYBOARDS
+# ============================================================
+
+def main_keyboard(user_id):
+    rows = []
+
+    sections = get_children(None)
+
+    for section in sections:
+        rows.append([
+            InlineKeyboardButton(
+                f"{section['icon']} {section['name']}",
+                callback_data=f"OPEN:{section['id']}"
             )
-            VALUES(?,?,?)
-            """,
-            (
-                user.id,
-                user.first_name or "",
-                user.username or ""
+        ])
+
+    conn = db_connect()
+
+    system = conn.execute("""
+        SELECT *
+        FROM system_buttons
+        WHERE enabled=1
+        ORDER BY sort_order,id
+    """).fetchall()
+
+    conn.close()
+
+    temp = []
+
+    for button in system:
+        if button["admin_only"] and not is_admin(user_id):
+            continue
+
+        temp.append(
+            InlineKeyboardButton(
+                f"{button['icon']} {button['label']}",
+                callback_data=f"SYS:{button['button_key']}"
             )
         )
 
-        conn.commit()
+        if len(temp) == 2:
+            rows.append(temp)
+            temp = []
 
-        return old is None
+    if temp:
+        rows.append(temp)
 
-
-def get_users():
-
-    with closing(get_db()) as conn:
-
-        rows = conn.execute(
-            "SELECT user_id FROM users"
-        ).fetchall()
-
-        return [x[0] for x in rows]
-
-# =========================================================
-# ADMIN
-# =========================================================
-
-def is_admin(user_id):
-
-    if user_id == ADMIN_ID:
-        return True
-
-    with closing(get_db()) as conn:
-
-        return conn.execute(
-            """
-            SELECT 1
-            FROM admins
-            WHERE user_id=?
-            """,
-            (user_id,)
-        ).fetchone() is not None
-
-# =========================================================
-# KEYBOARDS
-# =========================================================
-
-def keyboard(rows):
-
-    return ReplyKeyboardMarkup(
-        rows,
-        resize_keyboard=True,
-        is_persistent=True
-    )
+    return InlineKeyboardMarkup(rows)
 
 
-def main_keyboard(user_id):
+def section_keyboard(user_id, section_id):
+    rows = []
 
-    rows = [
+    children = get_children(section_id)
 
-        [
-            KeyboardButton("📚 الأقسام"),
-            KeyboardButton("⭐ المفضلة")
-        ],
-
-        [
-            KeyboardButton("🔥 الأكثر دخولاً"),
-            KeyboardButton("🔍 البحث")
-        ],
-
-        [
-            KeyboardButton("⭐ تقييم البوت"),
-            KeyboardButton("💬 مراسلة الأدمن")
-        ],
-
-        [
-            KeyboardButton("ℹ️ حول البوت")
-        ]
-    ]
-
-    if is_admin(user_id):
-
+    for child in children:
         rows.append([
-            KeyboardButton("⚙️ لوحة الأدمن")
+            InlineKeyboardButton(
+                f"{child['icon']} {child['name']}",
+                callback_data=f"OPEN:{child['id']}"
+            )
         ])
 
-    return keyboard(rows)
+    favorite_text = (
+        "💛 إزالة من المفضلة"
+        if is_favorite(user_id, section_id)
+        else "⭐ إضافة إلى المفضلة"
+    )
+
+    rows.append([
+        InlineKeyboardButton(
+            favorite_text,
+            callback_data=f"FAV:{section_id}"
+        )
+    ])
+
+    if get_setting("notes_enabled", "1") == "1":
+        rows.append([
+            InlineKeyboardButton(
+                "✉️ ملاحظة بخصوص هذا القسم",
+                callback_data=f"NOTE:{section_id}"
+            )
+        ])
+
+    rows.append([
+        InlineKeyboardButton(
+            "🏠 القائمة الرئيسية",
+            callback_data="MAIN"
+        ),
+        InlineKeyboardButton(
+            "⬅️ الرجوع",
+            callback_data=f"BACK:{section_id}"
+        )
+    ])
+
+    rows.append([
+        InlineKeyboardButton(
+            f"🚪 خروج من {get_section(section_id)['name']}",
+            callback_data="MAIN"
+        )
+    ])
+
+    return InlineKeyboardMarkup(rows)
 
 
 def admin_keyboard():
-
-    return keyboard([
-
+    return InlineKeyboardMarkup([
         [
-            KeyboardButton("🔘 محرر الأزرار"),
-            KeyboardButton("📝 محرر المشاركات")
+            InlineKeyboardButton(
+                "🧩 محرر الأزرار",
+                callback_data="ADMIN:BUTTONS"
+            ),
+            InlineKeyboardButton(
+                "📝 تعديل المشاركات",
+                callback_data="ADMIN:CONTENT"
+            )
         ],
-
         [
-            KeyboardButton("📊 الإحصائيات"),
-            KeyboardButton("👥 المستخدمون")
+            InlineKeyboardButton(
+                "📊 الإحصائيات",
+                callback_data="ADMIN:STATS"
+            ),
+            InlineKeyboardButton(
+                "✉️ المراسلات",
+                callback_data="ADMIN:NOTES"
+            )
         ],
-
         [
-            KeyboardButton("📰 الأخبار"),
-            KeyboardButton("📢 إرسال جماعي")
+            InlineKeyboardButton(
+                "⭐ التقييمات",
+                callback_data="ADMIN:RATINGS"
+            ),
+            InlineKeyboardButton(
+                "⚙️ إعدادات البوت",
+                callback_data="ADMIN:SETTINGS"
+            )
         ],
-
         [
-            KeyboardButton("👮 المشرفون"),
-            KeyboardButton("📢 القنوات والمجموعات")
-        ],
-
-        [
-            KeyboardButton("⚙️ إعدادات البوت"),
-            KeyboardButton("🛠 الصيانة")
-        ],
-
-        [
-            KeyboardButton("🏠 القائمة الرئيسية")
-        ]
-    ])
-
-
-def button_editor_keyboard():
-
-    return keyboard([
-
-        [
-            KeyboardButton("➕ إضافة قسم"),
-            KeyboardButton("✏️ تعديل قسم")
-        ],
-
-        [
-            KeyboardButton("📦 نقل قسم"),
-            KeyboardButton("🔗 دمج قسم")
-        ],
-
-        [
-            KeyboardButton("🗑 حذف قسم"),
-            KeyboardButton("↕️ ترتيب الأقسام")
-        ],
-
-        [
-            KeyboardButton("📋 عرض الأقسام")
-        ],
-
-        [
-            KeyboardButton("🏠 القائمة الرئيسية"),
-            KeyboardButton("🔙 لوحة الأدمن")
-        ]
-    ])
-
-
-def post_editor_keyboard():
-
-    return keyboard([
-
-        [
-            KeyboardButton("➕ إضافة مشاركة"),
-            KeyboardButton("✏️ تعديل مشاركة")
-        ],
-
-        [
-            KeyboardButton("🗑 حذف مشاركة"),
-            KeyboardButton("📋 المشاركات")
-        ],
-
-        [
-            KeyboardButton("🏠 القائمة الرئيسية"),
-            KeyboardButton("🔙 لوحة الأدمن")
-        ]
-    ])
-
-
-def cancel_keyboard():
-
-    return keyboard([
-        [
-            KeyboardButton("❌ إلغاء")
-        ]
-    ])
-
-
-def back_keyboard():
-
-    return keyboard([
-        [
-            KeyboardButton("🔙 رجوع"),
-            KeyboardButton("🏠 القائمة الرئيسية")
-        ]
-    ])
-
-# =========================================================
-# BUTTONS
-# =========================================================
-
-def get_children(parent_id):
-
-    with closing(get_db()) as conn:
-
-        return conn.execute(
-            """
-            SELECT
-                id,
-                parent_id,
-                title,
-                position,
-                category
-            FROM buttons
-            WHERE parent_id=?
-            ORDER BY position,id
-            """,
-            (parent_id,)
-        ).fetchall()
-
-
-def get_button(button_id):
-
-    if not button_id:
-        return None
-
-    with closing(get_db()) as conn:
-
-        return conn.execute(
-            """
-            SELECT
-                id,
-                parent_id,
-                title,
-                position,
-                category
-            FROM buttons
-            WHERE id=?
-            """,
-            (button_id,)
-        ).fetchone()
-
-
-def get_all_buttons():
-
-    with closing(get_db()) as conn:
-
-        return conn.execute(
-            """
-            SELECT
-                id,
-                parent_id,
-                title,
-                position,
-                category
-            FROM buttons
-            ORDER BY parent_id,position,id
-            """
-        ).fetchall()
-
-
-def button_text(row):
-
-    return f"{row[2]} 〔{row[0]}〕"
-
-
-def parse_button_id(text):
-
-    if "〔" not in text:
-        return None
-
-    if "〕" not in text:
-        return None
-
-    try:
-
-        return int(
-            text.rsplit("〔", 1)[1]
-            .split("〕", 1)[0]
-        )
-
-    except Exception:
-
-        return None
-
-# =========================================================
-# NAVIGATION
-# =========================================================
-
-async def show_section(
-    update,
-    context,
-    parent_id=0,
-    title="📚 الأقسام"
-):
-
-    context.user_data["parent_id"] = parent_id
-
-    children = get_children(parent_id)
-
-    rows = []
-
-    for i in range(0, len(children), 2):
-
-        row = [
-            KeyboardButton(
-                button_text(children[i])
+            InlineKeyboardButton(
+                "🏠 القائمة الرئيسية",
+                callback_data="MAIN"
             )
         ]
-
-        if i + 1 < len(children):
-
-            row.append(
-                KeyboardButton(
-                    button_text(children[i + 1])
-                )
-            )
-
-        rows.append(row)
-
-    rows.append([
-        KeyboardButton("🔙 خروج من القسم"),
-        KeyboardButton("🏠 القائمة الرئيسية")
     ])
 
-    if not children:
 
-        await update.message.reply_text(
-            f"📂 {title}\n\n"
-            "لا توجد أقسام مضافة حالياً.",
-            reply_markup=keyboard(rows)
+# ============================================================
+# MAIN SCREENS
+# ============================================================
+
+async def send_main_menu(update, context, edit=False):
+    user = update.effective_user
+
+    text = (
+        "🤖 <b>المساعد الذكي</b>\n\n"
+        "📚 <b>اختر القسم الذي تريد الدخول إليه:</b>"
+    )
+
+    if edit and update.callback_query:
+        await update.callback_query.edit_message_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_keyboard(user.id)
+        )
+    else:
+        await update.effective_message.reply_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_keyboard(user.id)
         )
 
+
+async def show_section(update, context, section_id, edit=True):
+    user = update.effective_user
+    section = get_section(section_id)
+
+    if not section:
+        await update.effective_message.reply_text(
+            bold("القسم غير موجود."),
+            parse_mode=ParseMode.HTML
+        )
         return
 
+    record_visit(user.id, section_id)
+
+    children = get_children(section_id)
+    contents = get_contents(section_id)
+
+    title = f"{section['icon']} {section['name']}"
+
+    text = (
+        f"<b>{html.escape(title)}</b>\n\n"
+        f"<b>المسار:</b> {html.escape(path_text(section_id))}\n\n"
+    )
+
+    if children:
+        text += "<b>اختر من الأقسام التالية:</b>"
+    elif contents:
+        text += "<b>المحتوى المتوفر لهذا القسم سيظهر أسفل هذه الواجهة.</b>"
+    else:
+        text += "<b>لا يوجد محتوى داخل هذا القسم حالياً.</b>"
+
+    keyboard = section_keyboard(user.id, section_id)
+
+    if edit and update.callback_query:
+        await update.callback_query.edit_message_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard
+        )
+    else:
+        await update.effective_message.reply_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard
+        )
+
+    # إرسال المحتوى المخزن
+    if contents:
+        for item in contents:
+            try:
+                await context.bot.copy_message(
+                    chat_id=update.effective_chat.id,
+                    from_chat_id=item["source_chat_id"],
+                    message_id=item["source_message_id"]
+                )
+            except Exception as e:
+                logger.error(
+                    "Content copy error: %s",
+                    e
+                )
+
+
+# ============================================================
+# START
+# ============================================================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+
+    first = add_user(user)
+
+    if first and get_setting("new_user_notifications", "1") == "1":
+        try:
+            username = (
+                f"@{user.username}"
+                if user.username
+                else "بدون معرف"
+            )
+
+            await context.bot.send_message(
+                ADMIN_ID,
+                (
+                    "🆕 <b>مستخدم جديد دخل البوت</b>\n\n"
+                    f"👤 الاسم: <b>{html.escape(user.full_name)}</b>\n"
+                    f"🔹 المعرف: <b>{html.escape(username)}</b>\n"
+                    f"🆔 ID: <code>{user.id}</code>"
+                ),
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logger.error("New user notification error: %s", e)
+
+    if get_setting("welcome_enabled", "1") == "1":
+        text = (
+            "👋 <b>أهلاً وسهلاً بك في المساعد الذكي</b>\n\n"
+            "📚 <b>اختر القسم الذي تريد الدخول إليه.</b>"
+        )
+    else:
+        text = "<b>القائمة الرئيسية</b>"
+
     await update.message.reply_text(
-        f"📂 {title}\n\n"
-        "اختر القسم المطلوب:",
-        reply_markup=keyboard(rows)
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=main_keyboard(user.id)
     )
 
 
-async def open_button(
-    update,
-    context,
-    button
-):
+# ============================================================
+# SYSTEM BUTTONS
+# ============================================================
 
-    button_id = button[0]
-    title = button[2]
-    parent_id = button[1]
+async def system_button(update, context, key):
+    query = update.callback_query
+    user = update.effective_user
 
-    # تسجيل الزيارة
-    with closing(get_db()) as conn:
+    if key == "favorites":
+        await show_favorites(update, context)
 
-        conn.execute(
-            """
-            INSERT INTO visits(button_id,count)
-            VALUES(?,1)
-            ON CONFLICT(button_id)
-            DO UPDATE SET count=count+1
-            """,
-            (button_id,)
-        )
+    elif key == "popular":
+        await show_popular(update, context)
 
-        conn.commit()
+    elif key == "rating":
+        await show_rating(update, context)
 
-    kids = get_children(button_id)
+    elif key == "about":
+        await show_about(update, context)
 
-    if kids:
+    elif key == "contact":
+        context.user_data["state"] = "global_note"
 
-        await show_section(
-            update,
-            context,
-            button_id,
-            title
-        )
-
-        return
-
-    post = None
-
-    with closing(get_db()) as conn:
-
-        post = conn.execute(
-            """
-            SELECT
-                content_type,
-                file_id,
-                text_content,
-                caption
-            FROM posts
-            WHERE button_id=?
-            """,
-            (button_id,)
-        ).fetchone()
-
-    context.user_data["parent_id"] = parent_id
-
-    if not post:
-
-        await update.message.reply_text(
-            f"📂 {title}\n\n"
-            "لا يوجد محتوى مضاف لهذا القسم حالياً.",
-            reply_markup=keyboard([
+        await query.edit_message_text(
+            "<b>✉️ مراسلة الإدارة</b>\n\n"
+            "<b>أرسل رسالتك الآن، وستصل إلى الإدارة مباشرة.</b>\n\n"
+            "<b>للإلغاء:</b> /cancel",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
                 [
-                    KeyboardButton("🔙 خروج من القسم"),
-                    KeyboardButton("🏠 القائمة الرئيسية")
+                    InlineKeyboardButton(
+                        "❌ إلغاء",
+                        callback_data="CANCEL"
+                    )
                 ]
             ])
         )
 
-        return
-
-    content_type, file_id, text_content, caption = post
-
-    # النص
-    if content_type == "text":
-
-        await update.message.reply_text(
-            text_content or "",
-            reply_markup=back_keyboard()
-        )
-
-    # صورة
-    elif content_type == "photo":
-
-        await update.message.reply_photo(
-            photo=file_id,
-            caption=caption or "",
-            reply_markup=back_keyboard()
-        )
-
-    # فيديو
-    elif content_type == "video":
-
-        await update.message.reply_video(
-            video=file_id,
-            caption=caption or "",
-            reply_markup=back_keyboard()
-        )
-
-    # ملف / PDF
-    elif content_type == "document":
-
-        await update.message.reply_document(
-            document=file_id,
-            caption=caption or "",
-            reply_markup=back_keyboard()
-        )
-
-    # صوت
-    elif content_type == "audio":
-
-        await update.message.reply_audio(
-            audio=file_id,
-            caption=caption or "",
-            reply_markup=back_keyboard()
-        )
-
-    # رسالة Telegram أخرى
-    elif content_type == "animation":
-
-        await update.message.reply_animation(
-            animation=file_id,
-            caption=caption or "",
-            reply_markup=back_keyboard()
-        )
-
-# =========================================================
-# START
-# =========================================================
-
-async def start(update, context):
-
-    new_user = save_user(
-        update.effective_user
-    )
-
-    context.user_data.clear()
-
-    if (
-        new_user
-        and update.effective_user.id != ADMIN_ID
-    ):
-
-        try:
-
-            await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=(
-                    "🔔 مستخدم جديد دخل البوت\n\n"
-                    f"👤 الاسم: "
-                    f"{update.effective_user.first_name or 'غير معروف'}\n"
-                    f"🆔 ID: "
-                    f"{update.effective_user.id}\n"
-                    f"🔗 username: "
-                    f"@{update.effective_user.username or 'لا يوجد'}"
-                )
+    elif key == "admin":
+        if not is_admin(user.id):
+            await query.answer(
+                "غير مسموح لك بالدخول.",
+                show_alert=True
             )
+            return
 
-        except Exception as e:
+        await show_admin(update, context)
 
-            logging.error(
-                "New user notification error: %s",
-                e
+
+async def show_favorites(update, context):
+    user = update.effective_user
+
+    conn = db_connect()
+
+    rows = conn.execute("""
+        SELECT s.*
+        FROM favorites f
+        JOIN sections s ON s.id=f.section_id
+        WHERE f.user_id=?
+        ORDER BY f.created_at DESC
+    """, (user.id,)).fetchall()
+
+    conn.close()
+
+    buttons = []
+
+    for section in rows:
+        buttons.append([
+            InlineKeyboardButton(
+                f"{section['icon']} {section['name']}",
+                callback_data=f"OPEN:{section['id']}"
             )
+        ])
 
-    if (
-        get_setting("maintenance") == "1"
-        and not is_admin(
-            update.effective_user.id
+    buttons.append([
+        InlineKeyboardButton(
+            "🏠 القائمة الرئيسية",
+            callback_data="MAIN"
         )
-    ):
+    ])
 
-        await update.message.reply_text(
-            "🛠 البوت حالياً في وضع الصيانة.\n\n"
-            "يرجى المحاولة لاحقاً."
-        )
-
-        return
-
-    await update.message.reply_text(
-        get_setting(
-            "start_text",
-            START_TEXT
+    await update.callback_query.edit_message_text(
+        "<b>⭐ المفضلة</b>\n\n"
+        + (
+            "<b>الأقسام المحفوظة:</b>"
+            if rows
+            else "<b>لا توجد أقسام في المفضلة حالياً.</b>"
         ),
-        reply_markup=main_keyboard(
-            update.effective_user.id
-        )
-    )
-
-# =========================================================
-# ADMIN PANEL
-# =========================================================
-
-async def admin_panel(update, context):
-
-    if not is_admin(
-        update.effective_user.id
-    ):
-        return
-
-    context.user_data.clear()
-
-    await update.message.reply_text(
-        "⚙️ لوحة الأدمن\n\n"
-        "اختر القسم المطلوب:",
-        reply_markup=admin_keyboard()
-    )
-
-# =========================================================
-# BUTTON EDITOR
-# =========================================================
-
-async def button_editor(update, context):
-
-    if not is_admin(
-        update.effective_user.id
-    ):
-        return
-
-    context.user_data.clear()
-
-    await update.message.reply_text(
-        "🔘 محرر الأقسام والأزرار\n\n"
-        "من هنا تستطيع إنشاء وتعديل ونقل ودمج "
-        "وحذف وترتيب جميع الأقسام والأزرار.",
-        reply_markup=button_editor_keyboard()
-    )
-
-# =========================================================
-# ADD BUTTON
-# =========================================================
-
-async def add_button(update, context):
-
-    context.user_data.clear()
-
-    context.user_data["state"] = "add_title"
-
-    await update.message.reply_text(
-        "➕ إضافة قسم / زر\n\n"
-        "أرسل اسم القسم:",
-        reply_markup=cancel_keyboard()
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons)
     )
 
 
-async def choose_parent(update, context):
-
-    buttons = get_all_buttons()
-
-    rows = [
-        [
-            KeyboardButton(
-                "🏠 القسم الرئيسي"
-            )
-        ]
-    ]
-
-    for row in buttons:
-
-        rows.append([
-            KeyboardButton(
-                button_text(row)
-            )
-        ])
-
-    rows.append([
-        KeyboardButton("❌ إلغاء")
-    ])
-
-    context.user_data["state"] = "choose_parent"
-
-    await update.message.reply_text(
-        "📁 اختر مكان القسم الجديد:",
-        reply_markup=keyboard(rows)
-    )
-
-# =========================================================
-# EDIT BUTTON
-# =========================================================
-
-async def edit_button(update, context):
-
-    buttons = get_all_buttons()
-
-    if not buttons:
-
-        await update.message.reply_text(
-            "❌ لا توجد أقسام حالياً.",
-            reply_markup=button_editor_keyboard()
-        )
-
-        return
-
-    rows = []
-
-    for row in buttons:
-
-        rows.append([
-            KeyboardButton(
-                button_text(row)
-            )
-        ])
-
-    rows.append([
-        KeyboardButton("❌ إلغاء")
-    ])
-
-    context.user_data["state"] = "edit_select"
-
-    await update.message.reply_text(
-        "✏️ اختر القسم الذي تريد تعديل اسمه:",
-        reply_markup=keyboard(rows)
-    )
-
-# =========================================================
-# MOVE BUTTON
-# =========================================================
-
-async def move_start(update, context):
-
-    buttons = get_all_buttons()
-
-    if not buttons:
-
-        await update.message.reply_text(
-            "❌ لا توجد أقسام.",
-            reply_markup=button_editor_keyboard()
-        )
-
-        return
-
-    rows = []
-
-    for row in buttons:
-
-        rows.append([
-            KeyboardButton(
-                button_text(row)
-            )
-        ])
-
-    rows.append([
-        KeyboardButton("❌ إلغاء")
-    ])
-
-    context.user_data["state"] = "move_select"
-
-    await update.message.reply_text(
-        "📦 اختر القسم الذي تريد نقله:",
-        reply_markup=keyboard(rows)
-    )
-
-# =========================================================
-# DELETE BUTTON
-# =========================================================
-
-async def delete_start(update, context):
-
-    buttons = get_all_buttons()
-
-    if not buttons:
-
-        await update.message.reply_text(
-            "❌ لا توجد أقسام للحذف.",
-            reply_markup=button_editor_keyboard()
-        )
-
-        return
-
-    rows = []
-
-    for row in buttons:
-
-        rows.append([
-            KeyboardButton(
-                button_text(row)
-            )
-        ])
-
-    rows.append([
-        KeyboardButton("❌ إلغاء")
-    ])
-
-    context.user_data["state"] = "delete_select"
-
-    await update.message.reply_text(
-        "🗑 اختر القسم الذي تريد حذفه:",
-        reply_markup=keyboard(rows)
-    )
-
-# =========================================================
-# POST EDITOR
-# =========================================================
-
-async def post_editor(update, context):
-
-    if not is_admin(
-        update.effective_user.id
-    ):
-        return
-
-    context.user_data.clear()
-
-    await update.message.reply_text(
-        "📝 محرر المشاركات\n\n"
-        "اختر القسم ثم أرسل المحتوى مباشرة.\n\n"
-        "لا تحتاج إلى تحديد PDF أو صورة أو فيديو.\n"
-        "البوت يتعرف تلقائياً على نوع الرسالة.",
-        reply_markup=post_editor_keyboard()
-    )
-
-
-async def select_post_button(update, context, action):
-
-    buttons = get_all_buttons()
-
-    if not buttons:
-
-        await update.message.reply_text(
-            "❌ أنشئ الأقسام أولاً من محرر الأزرار.",
-            reply_markup=post_editor_keyboard()
-        )
-
-        return
-
-    rows = []
-
-    for row in buttons:
-
-        rows.append([
-            KeyboardButton(
-                button_text(row)
-            )
-        ])
-
-    rows.append([
-        KeyboardButton("❌ إلغاء")
-    ])
-
-    context.user_data["state"] = action
-
-    await update.message.reply_text(
-        "📂 اختر القسم الذي تريد إضافة/تعديل المحتوى له:",
-        reply_markup=keyboard(rows)
-    )
-
-# =========================================================
-# SAVE ANY CONTENT
-# =========================================================
-
-def save_content(
-    button_id,
-    content_type,
-    file_id=None,
-    text_content=None,
-    caption=None
-):
-
-    with closing(get_db()) as conn:
-
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO posts(
-                button_id,
-                content_type,
-                file_id,
-                text_content,
-                caption
-            )
-            VALUES(?,?,?,?,?)
-            """,
-            (
-                button_id,
-                content_type,
-                file_id,
-                text_content,
-                caption
-            )
-        )
-
-        conn.commit()
-
-# =========================================================
-# FAVORITES
-# =========================================================
-
-async def toggle_favorite(update, context, button_id):
-
-    with closing(get_db()) as conn:
-
-        exists = conn.execute(
-            """
-            SELECT 1
-            FROM favorites
-            WHERE user_id=? AND button_id=?
-            """,
-            (
-                update.effective_user.id,
-                button_id
-            )
-        ).fetchone()
-
-        if exists:
-
-            conn.execute(
-                """
-                DELETE FROM favorites
-                WHERE user_id=? AND button_id=?
-                """,
-                (
-                    update.effective_user.id,
-                    button_id
-                )
-            )
-
-            text = "☆ تمت إزالة القسم من المفضلة."
-
-        else:
-
-            conn.execute(
-                """
-                INSERT OR IGNORE
-                INTO favorites(user_id,button_id)
-                VALUES(?,?)
-                """,
-                (
-                    update.effective_user.id,
-                    button_id
-                )
-            )
-
-            text = "⭐ تمت إضافة القسم إلى المفضلة."
-
-        conn.commit()
-
-    await update.message.reply_text(
-        text,
-        reply_markup=back_keyboard()
-    )
-
-
-async def favorites(update, context):
-
-    with closing(get_db()) as conn:
-
-        rows = conn.execute("""
-            SELECT
-                b.id,
-                b.parent_id,
-                b.title,
-                b.position,
-                b.category
-            FROM favorites f
-            JOIN buttons b
-            ON b.id=f.button_id
-            WHERE f.user_id=?
-            ORDER BY b.title
-        """, (
-            update.effective_user.id,
-        )).fetchall()
-
-    if not rows:
-
-        await update.message.reply_text(
-            "⭐ المفضلة\n\n"
-            "لا توجد أقسام محفوظة.",
-            reply_markup=back_keyboard()
-        )
-
-        return
-
-    keys = []
+async def show_popular(update, context):
+    conn = db_connect()
+
+    rows = conn.execute("""
+        SELECT
+            s.id,
+            s.name,
+            s.icon,
+            SUM(v.count) AS total
+        FROM visits v
+        JOIN sections s ON s.id=v.section_id
+        GROUP BY s.id
+        ORDER BY total DESC
+        LIMIT 10
+    """).fetchall()
+
+    conn.close()
+
+    buttons = []
 
     for row in rows:
-
-        keys.append([
-            KeyboardButton(
-                button_text(row)
+        buttons.append([
+            InlineKeyboardButton(
+                f"{row['icon']} {row['name']} — {row['total']} زيارة",
+                callback_data=f"OPEN:{row['id']}"
             )
         ])
 
-    keys.append([
-        KeyboardButton("🏠 القائمة الرئيسية")
-    ])
-
-    context.user_data["favorite_mode"] = True
-
-    await update.message.reply_text(
-        "⭐ المفضلة\n\n"
-        "اختر القسم:",
-        reply_markup=keyboard(keys)
-    )
-
-# =========================================================
-# MOST VISITED
-# =========================================================
-
-async def most_visited(update, context):
-
-    with closing(get_db()) as conn:
-
-        rows = conn.execute("""
-            SELECT
-                b.id,
-                b.parent_id,
-                b.title,
-                b.position,
-                b.category,
-                v.count
-            FROM visits v
-            JOIN buttons b
-            ON b.id=v.button_id
-            ORDER BY v.count DESC
-            LIMIT 20
-        """).fetchall()
-
-    if not rows:
-
-        await update.message.reply_text(
-            "🔥 لا توجد زيارات مسجلة بعد.",
-            reply_markup=back_keyboard()
+    buttons.append([
+        InlineKeyboardButton(
+            "🏠 القائمة الرئيسية",
+            callback_data="MAIN"
         )
-
-        return
-
-    keys = []
-
-    for row in rows:
-
-        keys.append([
-            KeyboardButton(
-                f"{row[2]} — {row[5]} زيارة 〔{row[0]}〕"
-            )
-        ])
-
-    keys.append([
-        KeyboardButton("🏠 القائمة الرئيسية")
     ])
 
-    context.user_data["popular_mode"] = True
-
-    await update.message.reply_text(
-        "🔥 الأكثر دخولاً\n\n"
-        "اختر القسم:",
-        reply_markup=keyboard(keys)
+    await update.callback_query.edit_message_text(
+        "<b>📊 الأكثر دخولاً</b>\n\n"
+        "<b>أكثر الأقسام زيارة:</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons)
     )
 
-# =========================================================
-# RATING
-# =========================================================
 
-async def rating_start(update, context):
-
-    context.user_data["state"] = "rating"
-
-    await update.message.reply_text(
-        "⭐ تقييم البوت\n\n"
-        "اختر تقييمك:",
-        reply_markup=keyboard([
+async def show_rating(update, context):
+    await update.callback_query.edit_message_text(
+        "<b>⭐ تقييم البوت</b>\n\n"
+        "<b>اختر تقييمك:</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
             [
-                KeyboardButton("⭐"),
-                KeyboardButton("⭐⭐")
+                InlineKeyboardButton("⭐", callback_data="RATE:1"),
+                InlineKeyboardButton("⭐⭐", callback_data="RATE:2"),
+                InlineKeyboardButton("⭐⭐⭐", callback_data="RATE:3"),
             ],
             [
-                KeyboardButton("⭐⭐⭐"),
-                KeyboardButton("⭐⭐⭐⭐")
+                InlineKeyboardButton("⭐⭐⭐⭐", callback_data="RATE:4"),
+                InlineKeyboardButton("⭐⭐⭐⭐⭐", callback_data="RATE:5"),
             ],
             [
-                KeyboardButton("⭐⭐⭐⭐⭐")
-            ],
-            [
-                KeyboardButton("❌ إلغاء")
+                InlineKeyboardButton(
+                    "🏠 القائمة الرئيسية",
+                    callback_data="MAIN"
+                )
             ]
         ])
     )
 
 
+async def show_about(update, context):
+    text = (
+        "<b>ℹ️ حول البوت</b>\n\n"
+        "<b>📚 فهرس الاستخدام:</b>\n\n"
+        "1️⃣ <b>القائمة الرئيسية</b>\n"
+        "منها تدخل إلى جميع الأقسام الرئيسية.\n\n"
+        "2️⃣ <b>الأقسام الفرعية</b>\n"
+        "كل قسم يمكن أن يحتوي على أقسام أخرى حتى أي مستوى.\n\n"
+        "3️⃣ <b>المحتوى</b>\n"
+        "المحاضرات يمكن أن تحتوي PDF أو صورة أو فيديو "
+        "أو ملف أو صوت أو أي محتوى يسمح به Telegram.\n\n"
+        "4️⃣ <b>المفضلة</b>\n"
+        "احفظ الأقسام التي تدخل إليها كثيراً.\n\n"
+        "5️⃣ <b>الأكثر دخولاً</b>\n"
+        "يعرض الأقسام الأكثر زيارة.\n\n"
+        "6️⃣ <b>مراسلة الإدارة</b>\n"
+        "يمكن إرسال ملاحظة أو مشكلة إلى الإدارة.\n\n"
+        "7️⃣ <b>تقييم البوت</b>\n"
+        "يمكنك تقييم البوت من نجمة إلى خمس نجوم.\n\n"
+        "8️⃣ <b>لوحة الإدارة</b>\n"
+        "الإدارة تستطيع إنشاء وتعديل ونقل ودمج وحذف الأقسام، "
+        "وتعديل الأزرار والمحتوى.\n\n"
+        "<b>🎯 الهدف:</b>\n"
+        "تنظيم المحاضرات والملفات بطريقة سهلة وسريعة."
+    )
+
+    await update.callback_query.edit_message_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "🏠 القائمة الرئيسية",
+                    callback_data="MAIN"
+                )
+            ]
+        ])
+    )
+
+
+# ============================================================
+# RATING
+# ============================================================
+
 async def save_rating(update, context, rating):
+    user = update.effective_user
 
-    with closing(get_db()) as conn:
+    conn = db_connect()
 
-        conn.execute(
-            """
-            INSERT INTO ratings(
-                user_id,
-                rating,
-                note
-            )
-            VALUES(?,?,?)
-            """,
-            (
-                update.effective_user.id,
-                rating,
-                ""
-            )
-        )
+    conn.execute("""
+        INSERT INTO ratings
+        (user_id,rating,comment,created_at)
+        VALUES (?,?,?,?)
+    """, (
+        user.id,
+        rating,
+        "",
+        now()
+    ))
 
-        conn.commit()
+    conn.commit()
+    conn.close()
+
+    await update.callback_query.answer(
+        "تم حفظ تقييمك ❤️",
+        show_alert=True
+    )
+
+    await update.callback_query.edit_message_text(
+        f"<b>شكراً لك ❤️</b>\n\n"
+        f"<b>تقييمك:</b> {'⭐' * rating}",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "🏠 القائمة الرئيسية",
+                    callback_data="MAIN"
+                )
+            ]
+        ])
+    )
+
+
+# ============================================================
+# NOTES
+# ============================================================
+
+async def start_note(update, context, section_id):
+    context.user_data["state"] = "section_note"
+    context.user_data["note_section_id"] = section_id
+
+    section = get_section(section_id)
+
+    await update.callback_query.edit_message_text(
+        f"<b>✉️ ملاحظة عن قسم: "
+        f"{html.escape(section['name'])}</b>\n\n"
+        "<b>أرسل الملاحظة الآن.</b>\n\n"
+        "<b>للإلغاء:</b> /cancel",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "❌ إلغاء",
+                    callback_data="CANCEL"
+                )
+            ]
+        ])
+    )
+
+
+async def save_note(update, context, section_id, text):
+    user = update.effective_user
+
+    conn = db_connect()
+
+    conn.execute("""
+        INSERT INTO notes
+        (user_id,section_id,text,created_at)
+        VALUES (?,?,?,?)
+    """, (
+        user.id,
+        section_id,
+        text,
+        now()
+    ))
+
+    note_id = conn.execute(
+        "SELECT last_insert_rowid()"
+    ).fetchone()[0]
+
+    conn.commit()
+    conn.close()
+
+    section = get_section(section_id)
 
     try:
-
         await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=(
-                "⭐ تقييم جديد\n\n"
-                f"التقييم: {rating}/5\n"
-                f"المستخدم: "
-                f"{update.effective_user.first_name or 'غير معروف'}\n"
-                f"ID: {update.effective_user.id}"
-            )
+            ADMIN_ID,
+            (
+                "✉️ <b>ملاحظة جديدة</b>\n\n"
+                f"🆔 رقم: <code>{note_id}</code>\n"
+                f"👤 المستخدم: <b>{html.escape(user.full_name)}</b>\n"
+                f"🆔 ID: <code>{user.id}</code>\n"
+                f"📂 القسم: <b>{html.escape(section['name'])}</b>\n\n"
+                f"📝 <b>الملاحظة:</b>\n"
+                f"{html.escape(text)}"
+            ),
+            parse_mode=ParseMode.HTML
         )
-
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error("Note notification error: %s", e)
 
     context.user_data.clear()
 
     await update.message.reply_text(
-        "✅ شكراً لتقييمك ❤️",
-        reply_markup=main_keyboard(
-            update.effective_user.id
-        )
-    )
-
-# =========================================================
-# CONTACT ADMIN
-# =========================================================
-
-async def contact_start(update, context):
-
-    context.user_data["state"] = "contact"
-
-    await update.message.reply_text(
-        "💬 مراسلة الأدمن\n\n"
-        "أرسل رسالتك أو صورتك أو ملفك أو فيديوك.\n"
-        "سيتم إيصالها إلى الأدمن.",
-        reply_markup=cancel_keyboard()
+        "<b>✅ تم إرسال ملاحظتك إلى الإدارة.</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=main_keyboard(user.id)
     )
 
 
-async def contact_admin(update, context):
+# ============================================================
+# ADMIN
+# ============================================================
 
-    user = update.effective_user
-
-    try:
-
-        await update.message.forward(
-            chat_id=ADMIN_ID
-        )
-
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=(
-                "💬 رسالة من مستخدم\n\n"
-                f"👤 {user.first_name or 'غير معروف'}\n"
-                f"🆔 {user.id}\n"
-                f"🔗 @{user.username or 'لا يوجد'}"
-            )
-        )
-
-        context.user_data.clear()
-
-        await update.message.reply_text(
-            "✅ تم إرسال رسالتك إلى الأدمن.",
-            reply_markup=main_keyboard(
-                user.id
-            )
-        )
-
-    except Exception as e:
-
-        logging.error(
-            "Contact error: %s",
-            e
-        )
-
-        await update.message.reply_text(
-            "❌ تعذر إرسال الرسالة.",
-            reply_markup=main_keyboard(
-                user.id
-            )
-        )
-
-# =========================================================
-# SEARCH
-# =========================================================
-
-async def search_start(update, context):
-
-    context.user_data["state"] = "search"
-
-    await update.message.reply_text(
-        "🔍 البحث\n\n"
-        "أرسل اسم المادة أو القسم أو المحاضرة:",
-        reply_markup=cancel_keyboard()
+async def show_admin(update, context):
+    text = (
+        "🔐 <b>لوحة الإدارة</b>\n\n"
+        "<b>اختر العملية المطلوبة:</b>"
     )
 
-
-async def search(update, context, query):
-
-    with closing(get_db()) as conn:
-
-        rows = conn.execute("""
-            SELECT
-                id,
-                parent_id,
-                title,
-                position,
-                category
-            FROM buttons
-            WHERE title LIKE ?
-            ORDER BY title
-            LIMIT 50
-        """, (
-            f"%{query.strip()}%",
-        )).fetchall()
-
-    if not rows:
-
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_keyboard()
+        )
+    else:
         await update.message.reply_text(
-            "❌ لم يتم العثور على نتائج.",
-            reply_markup=main_keyboard(
-                update.effective_user.id
-            )
-        )
-
-        context.user_data.clear()
-
-        return
-
-    keys = []
-
-    for row in rows:
-
-        keys.append([
-            KeyboardButton(
-                button_text(row)
-            )
-        ])
-
-    keys.append([
-        KeyboardButton("🏠 القائمة الرئيسية")
-    ])
-
-    context.user_data["search_results"] = {
-        row[0]: row for row in rows
-    }
-
-    context.user_data["state"] = "search_result"
-
-    await update.message.reply_text(
-        f"🔍 نتائج البحث عن: {query}",
-        reply_markup=keyboard(keys)
-    )
-
-# =========================================================
-# MEDIA DETECTION
-# =========================================================
-
-async def handle_media(update, context):
-
-    user_id = update.effective_user.id
-
-    save_user(update.effective_user)
-
-    state = context.user_data.get("state")
-
-    # ---------------------------------------------
-    # ADMIN ADD/EDIT CONTENT
-    # ---------------------------------------------
-
-    if is_admin(user_id) and state in (
-        "post_add",
-        "post_edit"
-    ):
-
-        button_id = context.user_data.get(
-            "selected_button"
-        )
-
-        if not button_id:
-            return
-
-        message = update.message
-
-        content_type = None
-        file_id = None
-
-        if message.document:
-
-            content_type = "document"
-            file_id = message.document.file_id
-
-        elif message.photo:
-
-            content_type = "photo"
-            file_id = message.photo[-1].file_id
-
-        elif message.video:
-
-            content_type = "video"
-            file_id = message.video.file_id
-
-        elif message.audio:
-
-            content_type = "audio"
-            file_id = message.audio.file_id
-
-        elif message.animation:
-
-            content_type = "animation"
-            file_id = message.animation.file_id
-
-        if not content_type:
-
-            await message.reply_text(
-                "❌ لم أتعرف على نوع المحتوى."
-            )
-
-            return
-
-        save_content(
-            button_id=button_id,
-            content_type=content_type,
-            file_id=file_id,
-            caption=message.caption or ""
-        )
-
-        context.user_data.clear()
-
-        await message.reply_text(
-            "✅ تم حفظ المحتوى بنجاح.\n\n"
-            "البوت سيعرضه تلقائياً عند الضغط على القسم.",
-            reply_markup=post_editor_keyboard()
-        )
-
-        return
-
-    # ---------------------------------------------
-    # CONTACT ADMIN
-    # ---------------------------------------------
-
-    if state == "contact":
-
-        await contact_admin(
-            update,
-            context
-        )
-
-        return
-
-    # ---------------------------------------------
-    # BROADCAST
-    # ---------------------------------------------
-
-    if is_admin(user_id) and state == "broadcast":
-
-        users = get_users()
-
-        success = 0
-        failed = 0
-
-        for uid in users:
-
-            try:
-
-                await update.message.copy(
-                    chat_id=uid
-                )
-
-                success += 1
-
-            except Exception:
-
-                failed += 1
-
-        context.user_data.clear()
-
-        await update.message.reply_text(
-            "📢 اكتمل الإرسال الجماعي.\n\n"
-            f"✅ نجح: {success}\n"
-            f"❌ فشل: {failed}",
+            text,
+            parse_mode=ParseMode.HTML,
             reply_markup=admin_keyboard()
         )
 
-# =========================================================
-# TEXT HANDLER
-# =========================================================
 
-async def handle_text(update, context):
+# ============================================================
+# ADMIN - BUTTON EDITOR
+# ============================================================
+
+async def editor_home(update, context):
+    await update.callback_query.edit_message_text(
+        "<b>🧩 محرر الأزرار</b>\n\n"
+        "<b>هنا تستطيع التحكم بكل الأقسام والأزرار.</b>\n\n"
+        "يمكنك:\n"
+        "➕ إضافة قسم\n"
+        "✏️ تعديل الاسم\n"
+        "🎨 تعديل الأيقونة\n"
+        "↕️ تغيير الترتيب\n"
+        "📦 نقل القسم\n"
+        "🔗 دمج الأقسام\n"
+        "🗑 حذف القسم\n"
+        "👁 إخفاء/إظهار القسم",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "🏠 تعديل الواجهة الرئيسية",
+                    callback_data="ED:ROOT"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "➕ إضافة قسم رئيسي",
+                    callback_data="ADD:ROOT"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⚙️ أزرار النظام",
+                    callback_data="ED:SYSTEM"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬅️ لوحة الإدارة",
+                    callback_data="ADMIN:HOME"
+                )
+            ]
+        ])
+    )
+
+
+async def edit_section_screen(update, context, section_id):
+    section = get_section(section_id)
+
+    if not section:
+        await update.callback_query.answer(
+            "القسم غير موجود.",
+            show_alert=True
+        )
+        return
+
+    children = get_all_children(section_id)
+
+    buttons = []
+
+    for child in children:
+        buttons.append([
+            InlineKeyboardButton(
+                f"{child['icon']} {child['name']}",
+                callback_data=f"EDSEC:{child['id']}"
+            )
+        ])
+
+    buttons.extend([
+        [
+            InlineKeyboardButton(
+                "➕ إضافة قسم داخل هذا القسم",
+                callback_data=f"ADD:{section_id}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "✏️ تعديل اسم القسم",
+                callback_data=f"RENAME:{section_id}"
+            ),
+            InlineKeyboardButton(
+                "🎨 تعديل الأيقونة",
+                callback_data=f"ICON:{section_id}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📦 نقل القسم",
+                callback_data=f"MOVE:{section_id}"
+            ),
+            InlineKeyboardButton(
+                "🔗 دمج القسم",
+                callback_data=f"MERGE:{section_id}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "⬆️ رفع",
+                callback_data=f"UP:{section_id}"
+            ),
+            InlineKeyboardButton(
+                "⬇️ تنزيل",
+                callback_data=f"DOWN:{section_id}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "👁 إظهار/إخفاء",
+                callback_data=f"TOGGLE:{section_id}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🗑 حذف القسم",
+                callback_data=f"DELETE:{section_id}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "⬅️ محرر الأزرار",
+                callback_data="ADMIN:BUTTONS"
+            )
+        ]
+    ])
+
+    await update.callback_query.edit_message_text(
+        f"<b>🧩 تحرير:</b> "
+        f"{html.escape(section['icon'])} "
+        f"{html.escape(section['name'])}\n\n"
+        f"<b>المسار:</b> "
+        f"{html.escape(path_text(section_id))}\n\n"
+        "<b>الأقسام الموجودة داخل هذا القسم:</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+async def edit_root_screen(update, context):
+    sections = get_all_children(None)
+
+    buttons = []
+
+    for section in sections:
+        buttons.append([
+            InlineKeyboardButton(
+                f"{section['icon']} {section['name']}",
+                callback_data=f"EDSEC:{section['id']}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            "➕ إضافة قسم رئيسي",
+            callback_data="ADD:ROOT"
+        )
+    ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            "⚙️ أزرار النظام",
+            callback_data="ED:SYSTEM"
+        )
+    ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            "⬅️ محرر الأزرار",
+            callback_data="ADMIN:BUTTONS"
+        )
+    ])
+
+    await update.callback_query.edit_message_text(
+        "<b>🏠 تحرير الواجهة الرئيسية</b>\n\n"
+        "<b>اختر القسم الذي تريد تعديله:</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+# ============================================================
+# ADD SECTION
+# ============================================================
+
+async def ask_add_section(update, context, parent_id):
+    context.user_data["state"] = "add_section"
+    context.user_data["parent_id"] = parent_id
+
+    if parent_id == "ROOT":
+        location = "الواجهة الرئيسية"
+    else:
+        parent = get_section(parent_id)
+        location = parent["name"] if parent else "القسم"
+
+    await update.callback_query.edit_message_text(
+        f"<b>➕ إضافة قسم جديد داخل: "
+        f"{html.escape(location)}</b>\n\n"
+        "<b>أرسل اسم القسم الآن.</b>\n\n"
+        "<b>مثال:</b>\n"
+        "<b>المحاضرة الأولى</b>\n\n"
+        "<b>للإلغاء:</b> /cancel",
+        parse_mode=ParseMode.HTML
+    )
+
+
+def create_section(parent_id, name):
+    conn = db_connect()
+
+    if parent_id == "ROOT":
+        parent = None
+    else:
+        parent = int(parent_id)
+
+    row = conn.execute("""
+        SELECT COALESCE(MAX(sort_order),0)+1
+        FROM sections
+        WHERE parent_id IS ?
+    """, (parent,)).fetchone()
+
+    order = row[0]
+
+    cur = conn.execute("""
+        INSERT INTO sections
+        (parent_id,name,icon,sort_order,enabled,created_at)
+        VALUES (?,?,?,?,?,?)
+    """, (
+        parent,
+        name,
+        default_icon(name),
+        order,
+        1,
+        now()
+    ))
+
+    section_id = cur.lastrowid
+
+    conn.commit()
+    conn.close()
+
+    return section_id
+
+
+# ============================================================
+# RENAME / ICON
+# ============================================================
+
+async def ask_rename(update, context, section_id):
+    context.user_data["state"] = "rename_section"
+    context.user_data["section_id"] = section_id
+
+    section = get_section(section_id)
+
+    await update.callback_query.edit_message_text(
+        f"<b>✏️ تعديل اسم القسم الحالي:</b>\n"
+        f"<b>{html.escape(section['name'])}</b>\n\n"
+        "<b>أرسل الاسم الجديد:</b>",
+        parse_mode=ParseMode.HTML
+    )
+
+
+async def ask_icon(update, context, section_id):
+    context.user_data["state"] = "icon_section"
+    context.user_data["section_id"] = section_id
+
+    section = get_section(section_id)
+
+    await update.callback_query.edit_message_text(
+        f"<b>🎨 تعديل أيقونة:</b>\n\n"
+        f"<b>{html.escape(section['name'])}</b>\n"
+        f"<b>الأيقونة الحالية:</b> {section['icon']}\n\n"
+        "<b>أرسل الإيموجي الجديد:</b>",
+        parse_mode=ParseMode.HTML
+    )
+
+
+# ============================================================
+# DELETE
+# ============================================================
+
+def count_descendants(section_id):
+    children = get_all_children(section_id)
+    total = len(children)
+
+    for child in children:
+        total += count_descendants(child["id"])
+
+    return total
+
+
+async def confirm_delete(update, context, section_id):
+    section = get_section(section_id)
+
+    if not section:
+        return
+
+    children = count_descendants(section_id)
+    contents = len(get_contents(section_id))
+
+    await update.callback_query.edit_message_text(
+        "<b>⚠️ تأكيد الحذف</b>\n\n"
+        f"القسم: <b>{html.escape(section['name'])}</b>\n"
+        f"الأقسام داخله: <b>{children}</b>\n"
+        f"المشاركات: <b>{contents}</b>\n\n"
+        "<b>الحذف سيحذف القسم ومحتوياته.</b>\n"
+        "<b>هل أنت متأكد؟</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "✅ نعم، حذف",
+                    callback_data=f"DELETE_YES:{section_id}"
+                ),
+                InlineKeyboardButton(
+                    "❌ إلغاء",
+                    callback_data=f"EDSEC:{section_id}"
+                )
+            ]
+        ])
+    )
+
+
+def delete_section(section_id):
+    conn = db_connect()
+
+    conn.execute(
+        "DELETE FROM sections WHERE id=?",
+        (section_id,)
+    )
+
+    conn.commit()
+    conn.close()
+
+
+# ============================================================
+# MOVE
+# ============================================================
+
+def descendants_ids(section_id):
+    result = set()
+
+    for child in get_all_children(section_id):
+        result.add(child["id"])
+        result.update(descendants_ids(child["id"]))
+
+    return result
+
+
+async def move_screen(update, context, section_id):
+    section = get_section(section_id)
+
+    if not section:
+        return
+
+    forbidden = descendants_ids(section_id)
+    forbidden.add(section_id)
+
+    all_sections = []
+
+    conn = db_connect()
+    rows = conn.execute("""
+        SELECT *
+        FROM sections
+        ORDER BY parent_id,sort_order,id
+    """).fetchall()
+    conn.close()
+
+    buttons = [
+        [
+            InlineKeyboardButton(
+                "🏠 الواجهة الرئيسية",
+                callback_data=f"MOVE_TO:{section_id}:ROOT"
+            )
+        ]
+    ]
+
+    for row in rows:
+        if row["id"] in forbidden:
+            continue
+
+        buttons.append([
+            InlineKeyboardButton(
+                f"{row['icon']} {row['name']}",
+                callback_data=f"MOVE_TO:{section_id}:{row['id']}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            "❌ إلغاء",
+            callback_data=f"EDSEC:{section_id}"
+        )
+    ])
+
+    await update.callback_query.edit_message_text(
+        f"<b>📦 نقل القسم:</b>\n"
+        f"<b>{html.escape(section['name'])}</b>\n\n"
+        "<b>اختر القسم الجديد الذي سيكون بداخله:</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+async def confirm_move(update, context, source_id, target_id):
+    source = get_section(source_id)
+
+    if target_id == "ROOT":
+        target_name = "الواجهة الرئيسية"
+    else:
+        target = get_section(int(target_id))
+        target_name = target["name"]
+
+    await update.callback_query.edit_message_text(
+        "<b>⚠️ تأكيد النقل</b>\n\n"
+        f"<b>القسم:</b> {html.escape(source['name'])}\n"
+        f"<b>إلى:</b> {html.escape(target_name)}\n\n"
+        "<b>هل تريد تنفيذ النقل؟</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "✅ تأكيد النقل",
+                    callback_data=f"MOVE_YES:{source_id}:{target_id}"
+                ),
+                InlineKeyboardButton(
+                    "❌ إلغاء",
+                    callback_data=f"EDSEC:{source_id}"
+                )
+            ]
+        ])
+    )
+
+
+def perform_move(source_id, target_id):
+    conn = db_connect()
+
+    if target_id == "ROOT":
+        parent = None
+    else:
+        parent = int(target_id)
+
+    order = conn.execute("""
+        SELECT COALESCE(MAX(sort_order),0)+1
+        FROM sections
+        WHERE parent_id IS ?
+    """, (parent,)).fetchone()[0]
+
+    conn.execute("""
+        UPDATE sections
+        SET parent_id=?,sort_order=?
+        WHERE id=?
+    """, (
+        parent,
+        order,
+        source_id
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+# ============================================================
+# MERGE
+# ============================================================
+
+async def merge_screen(update, context, source_id):
+    source = get_section(source_id)
+
+    rows = []
+
+    conn = db_connect()
+    rows = conn.execute("""
+        SELECT *
+        FROM sections
+        WHERE id != ?
+        ORDER BY parent_id,sort_order,id
+    """, (source_id,)).fetchall()
+    conn.close()
+
+    forbidden = descendants_ids(source_id)
+
+    buttons = []
+
+    for row in rows:
+        if row["id"] in forbidden:
+            continue
+
+        buttons.append([
+            InlineKeyboardButton(
+                f"{row['icon']} {row['name']}",
+                callback_data=f"MERGE_TO:{source_id}:{row['id']}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            "❌ إلغاء",
+            callback_data=f"EDSEC:{source_id}"
+        )
+    ])
+
+    await update.callback_query.edit_message_text(
+        f"<b>🔗 دمج القسم:</b>\n"
+        f"<b>{html.escape(source['name'])}</b>\n\n"
+        "<b>اختر القسم الذي سيتم الدمج بداخله:</b>\n\n"
+        "<b>سيتم نقل الأقسام والمشاركات ثم حذف القسم الأصلي.</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+async def confirm_merge(update, context, source_id, target_id):
+    source = get_section(source_id)
+    target = get_section(target_id)
+
+    await update.callback_query.edit_message_text(
+        "<b>⚠️ تأكيد الدمج</b>\n\n"
+        f"<b>المصدر:</b> {html.escape(source['name'])}\n"
+        f"<b>الهدف:</b> {html.escape(target['name'])}\n\n"
+        "<b>سيتم نقل محتوى المصدر إلى الهدف، "
+        "ثم حذف المصدر.</b>\n\n"
+        "<b>هل تريد المتابعة؟</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "✅ نعم، دمج",
+                    callback_data=f"MERGE_YES:{source_id}:{target_id}"
+                ),
+                InlineKeyboardButton(
+                    "❌ إلغاء",
+                    callback_data=f"EDSEC:{source_id}"
+                )
+            ]
+        ])
+    )
+
+
+def perform_merge(source_id, target_id):
+    conn = db_connect()
+
+    max_order = conn.execute("""
+        SELECT COALESCE(MAX(sort_order),0)
+        FROM sections
+        WHERE parent_id=?
+    """, (target_id,)).fetchone()[0]
+
+    children = conn.execute("""
+        SELECT id
+        FROM sections
+        WHERE parent_id=?
+        ORDER BY sort_order,id
+    """, (source_id,)).fetchall()
+
+    for child in children:
+        max_order += 1
+
+        conn.execute("""
+            UPDATE sections
+            SET parent_id=?,sort_order=?
+            WHERE id=?
+        """, (
+            target_id,
+            max_order,
+            child["id"]
+        ))
+
+    conn.execute("""
+        UPDATE contents
+        SET section_id=?
+        WHERE section_id=?
+    """, (
+        target_id,
+        source_id
+    ))
+
+    conn.execute(
+        "DELETE FROM sections WHERE id=?",
+        (source_id,)
+    )
+
+    conn.commit()
+    conn.close()
+
+
+# ============================================================
+# REORDER
+# ============================================================
+
+def reorder(section_id, direction):
+    section = get_section(section_id)
+
+    if not section:
+        return
+
+    parent = section["parent_id"]
+
+    conn = db_connect()
+
+    rows = conn.execute("""
+        SELECT *
+        FROM sections
+        WHERE parent_id IS ?
+        ORDER BY sort_order,id
+    """, (parent,)).fetchall()
+
+    index = None
+
+    for i, row in enumerate(rows):
+        if row["id"] == section_id:
+            index = i
+            break
+
+    if index is None:
+        conn.close()
+        return
+
+    other_index = index - 1 if direction == "up" else index + 1
+
+    if other_index < 0 or other_index >= len(rows):
+        conn.close()
+        return
+
+    current = rows[index]
+    other = rows[other_index]
+
+    conn.execute("""
+        UPDATE sections
+        SET sort_order=?
+        WHERE id=?
+    """, (
+        other["sort_order"],
+        current["id"]
+    ))
+
+    conn.execute("""
+        UPDATE sections
+        SET sort_order=?
+        WHERE id=?
+    """, (
+        current["sort_order"],
+        other["id"]
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+# ============================================================
+# SYSTEM BUTTON EDITOR
+# ============================================================
+
+async def system_editor(update, context):
+    conn = db_connect()
+
+    rows = conn.execute("""
+        SELECT *
+        FROM system_buttons
+        ORDER BY sort_order,id
+    """).fetchall()
+
+    conn.close()
+
+    buttons = []
+
+    for row in rows:
+        status = "🟢" if row["enabled"] else "🔴"
+
+        buttons.append([
+            InlineKeyboardButton(
+                f"{status} {row['icon']} {row['label']}",
+                callback_data=f"SYS_EDIT:{row['button_key']}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            "⬅️ محرر الأزرار",
+            callback_data="ADMIN:BUTTONS"
+        )
+    ])
+
+    await update.callback_query.edit_message_text(
+        "<b>⚙️ محرر أزرار النظام</b>\n\n"
+        "<b>يمكنك تعديل اسم الزر وأيقونته وترتيبه وإظهاره أو إخفاءه.</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+async def system_button_edit(update, context, key):
+    conn = db_connect()
+
+    row = conn.execute("""
+        SELECT *
+        FROM system_buttons
+        WHERE button_key=?
+    """, (key,)).fetchone()
+
+    conn.close()
+
+    if not row:
+        return
+
+    await update.callback_query.edit_message_text(
+        f"<b>🧩 تعديل زر:</b>\n\n"
+        f"{row['icon']} <b>{html.escape(row['label'])}</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "✏️ تعديل الاسم",
+                    callback_data=f"SYS_RENAME:{key}"
+                ),
+                InlineKeyboardButton(
+                    "🎨 تعديل الأيقونة",
+                    callback_data=f"SYS_ICON:{key}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "👁 إظهار/إخفاء",
+                    callback_data=f"SYS_TOGGLE:{key}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬆️ رفع",
+                    callback_data=f"SYS_UP:{key}"
+                ),
+                InlineKeyboardButton(
+                    "⬇️ تنزيل",
+                    callback_data=f"SYS_DOWN:{key}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬅️ رجوع",
+                    callback_data="ED:SYSTEM"
+                )
+            ]
+        ])
+    )
+
+
+# ============================================================
+# CONTENT EDITOR
+# ============================================================
+
+async def content_editor(update, context):
+    await update.callback_query.edit_message_text(
+        "<b>📝 تعديل المشاركات</b>\n\n"
+        "<b>اختر القسم الذي تريد إدارة محتواه.</b>\n\n"
+        "📄 PDF\n"
+        "🖼 صورة\n"
+        "🎬 فيديو\n"
+        "📎 ملف\n"
+        "🎵 صوت\n"
+        "💬 نص\n"
+        "وأي نوع محتوى يسمح به Telegram.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "📂 اختيار القسم",
+                    callback_data="CONTENT:BROWSE:ROOT"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬅️ لوحة الإدارة",
+                    callback_data="ADMIN:HOME"
+                )
+            ]
+        ])
+    )
+
+
+async def content_browse(update, context, parent_id):
+    if parent_id == "ROOT":
+        children = get_all_children(None)
+    else:
+        children = get_all_children(int(parent_id))
+
+    buttons = []
+
+    if parent_id != "ROOT":
+        section = get_section(int(parent_id))
+
+        buttons.append([
+            InlineKeyboardButton(
+                "➕ إضافة مشاركة لهذا القسم",
+                callback_data=f"CONTENT:ADD:{section['id']}"
+            )
+        ])
+
+    for child in children:
+        buttons.append([
+            InlineKeyboardButton(
+                f"{child['icon']} {child['name']}",
+                callback_data=f"CONTENT:OPEN:{child['id']}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            "⬅️ رجوع",
+            callback_data="ADMIN:CONTENT"
+        )
+    ])
+
+    await update.callback_query.edit_message_text(
+        "<b>📂 اختر القسم:</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+async def content_section(update, context, section_id):
+    section = get_section(section_id)
+    contents = get_contents(section_id)
+    children = get_all_children(section_id)
+
+    buttons = [
+        [
+            InlineKeyboardButton(
+                "➕ إضافة مشاركة",
+                callback_data=f"CONTENT:ADD:{section_id}"
+            )
+        ]
+    ]
+
+    for item in contents:
+        buttons.append([
+            InlineKeyboardButton(
+                f"📝 مشاركة #{item['id']} — {item['content_type']}",
+                callback_data=f"CONTENT:EDIT:{item['id']}"
+            )
+        ])
+
+    for child in children:
+        buttons.append([
+            InlineKeyboardButton(
+                f"📁 {child['name']}",
+                callback_data=f"CONTENT:OPEN:{child['id']}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            "⬅️ رجوع",
+            callback_data=f"CONTENT:BROWSE:{section['parent_id'] if section['parent_id'] is not None else 'ROOT'}"
+        )
+    ])
+
+    await update.callback_query.edit_message_text(
+        f"<b>📝 محتوى:</b> "
+        f"{html.escape(section['name'])}\n\n"
+        f"<b>عدد المشاركات:</b> {len(contents)}",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+async def ask_add_content(update, context, section_id):
+    section = get_section(section_id)
+
+    context.user_data["state"] = "add_content"
+    context.user_data["content_section_id"] = section_id
+
+    await update.callback_query.edit_message_text(
+        f"<b>➕ إضافة مشاركة إلى:</b>\n"
+        f"<b>{html.escape(section['name'])}</b>\n\n"
+        "<b>أرسل الآن المحتوى نفسه.</b>\n\n"
+        "يمكنك إرسال:\n"
+        "📄 PDF\n"
+        "🖼 صورة\n"
+        "🎬 فيديو\n"
+        "📎 ملف\n"
+        "🎵 صوت\n"
+        "💬 نص\n\n"
+        "<b>أو قم بإعادة توجيه رسالة من محادثة أخرى.</b>\n\n"
+        "<b>البوت يتعرف على نوع المحتوى تلقائياً.</b>\n\n"
+        "<b>للإلغاء:</b> /cancel",
+        parse_mode=ParseMode.HTML
+    )
+
+
+def detect_content_type(message):
+    if message.document:
+        return "document"
+    if message.photo:
+        return "photo"
+    if message.video:
+        return "video"
+    if message.audio:
+        return "audio"
+    if message.voice:
+        return "voice"
+    if message.animation:
+        return "animation"
+    if message.video_note:
+        return "video_note"
+    if message.sticker:
+        return "sticker"
+    if message.text:
+        return "text"
+
+    return "unknown"
+
+
+def save_content(section_id, chat_id, message_id, content_type):
+    conn = db_connect()
+
+    order = conn.execute("""
+        SELECT COALESCE(MAX(sort_order),0)+1
+        FROM contents
+        WHERE section_id=?
+    """, (section_id,)).fetchone()[0]
+
+    cur = conn.execute("""
+        INSERT INTO contents
+        (section_id,source_chat_id,source_message_id,content_type,sort_order,created_at)
+        VALUES (?,?,?,?,?,?)
+    """, (
+        section_id,
+        chat_id,
+        message_id,
+        content_type,
+        order,
+        now()
+    ))
+
+    content_id = cur.lastrowid
+
+    conn.commit()
+    conn.close()
+
+    return content_id
+
+
+async def ask_edit_content(update, context, content_id):
+    conn = db_connect()
+
+    row = conn.execute("""
+        SELECT c.*,s.name AS section_name
+        FROM contents c
+        JOIN sections s ON s.id=c.section_id
+        WHERE c.id=?
+    """, (content_id,)).fetchone()
+
+    conn.close()
+
+    if not row:
+        await update.callback_query.answer(
+            "المشاركة غير موجودة.",
+            show_alert=True
+        )
+        return
+
+    await update.callback_query.edit_message_text(
+        f"<b>📝 المشاركة #{content_id}</b>\n\n"
+        f"<b>القسم:</b> {html.escape(row['section_name'])}\n"
+        f"<b>النوع:</b> {html.escape(row['content_type'])}\n\n"
+        "<b>اختر العملية:</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "🔄 استبدال المحتوى",
+                    callback_data=f"CONTENT:REPLACE:{content_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🗑 حذف المشاركة",
+                    callback_data=f"CONTENT:DELETE:{content_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬅️ رجوع",
+                    callback_data=f"CONTENT:OPEN:{row['section_id']}"
+                )
+            ]
+        ])
+    )
+
+
+async def replace_content(update, context, content_id):
+    context.user_data["state"] = "replace_content"
+    context.user_data["replace_content_id"] = content_id
+
+    await update.callback_query.edit_message_text(
+        "<b>🔄 استبدال المشاركة</b>\n\n"
+        "<b>أرسل المحتوى الجديد الآن.</b>\n\n"
+        "<b>لا تحتاج لتحديد PDF أو صورة أو فيديو.</b>\n"
+        "<b>البوت يتعرف عليه تلقائياً.</b>",
+        parse_mode=ParseMode.HTML
+    )
+
+
+async def confirm_delete_content(update, context, content_id):
+    conn = db_connect()
+
+    row = conn.execute(
+        "SELECT * FROM contents WHERE id=?",
+        (content_id,)
+    ).fetchone()
+
+    conn.close()
+
+    if not row:
+        return
+
+    await update.callback_query.edit_message_text(
+        "<b>⚠️ تأكيد حذف المشاركة</b>\n\n"
+        f"<b>رقم المشاركة:</b> {content_id}\n"
+        f"<b>النوع:</b> {html.escape(row['content_type'])}\n\n"
+        "<b>هل تريد حذفها؟</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "✅ نعم، حذف",
+                    callback_data=f"CONTENT:DELETE_YES:{content_id}"
+                ),
+                InlineKeyboardButton(
+                    "❌ إلغاء",
+                    callback_data=f"CONTENT:EDIT:{content_id}"
+                )
+            ]
+        ])
+    )
+
+
+# ============================================================
+# ADMIN STATS
+# ============================================================
+
+async def admin_stats(update, context):
+    conn = db_connect()
+
+    users = conn.execute(
+        "SELECT COUNT(*) FROM users"
+    ).fetchone()[0]
+
+    sections = conn.execute(
+        "SELECT COUNT(*) FROM sections"
+    ).fetchone()[0]
+
+    contents = conn.execute(
+        "SELECT COUNT(*) FROM contents"
+    ).fetchone()[0]
+
+    ratings = conn.execute(
+        "SELECT COUNT(*) FROM ratings"
+    ).fetchone()[0]
+
+    notes = conn.execute(
+        "SELECT COUNT(*) FROM notes"
+    ).fetchone()[0]
+
+    avg = conn.execute(
+        "SELECT AVG(rating) FROM ratings"
+    ).fetchone()[0]
+
+    conn.close()
+
+    average = f"{avg:.2f}" if avg else "0"
+
+    await update.callback_query.edit_message_text(
+        "<b>📊 إحصائيات البوت</b>\n\n"
+        f"👥 المستخدمون: <b>{users}</b>\n"
+        f"📂 الأقسام: <b>{sections}</b>\n"
+        f"📝 المشاركات: <b>{contents}</b>\n"
+        f"⭐ التقييمات: <b>{ratings}</b>\n"
+        f"⭐ متوسط التقييم: <b>{average}</b>\n"
+        f"✉️ المراسلات: <b>{notes}</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "⬅️ لوحة الإدارة",
+                    callback_data="ADMIN:HOME"
+                )
+            ]
+        ])
+    )
+
+
+# ============================================================
+# ADMIN NOTES
+# ============================================================
+
+async def admin_notes(update, context):
+    conn = db_connect()
+
+    rows = conn.execute("""
+        SELECT
+            n.id,
+            n.text,
+            n.created_at,
+            u.first_name,
+            u.username,
+            s.name AS section_name
+        FROM notes n
+        LEFT JOIN users u ON u.user_id=n.user_id
+        LEFT JOIN sections s ON s.id=n.section_id
+        ORDER BY n.id DESC
+        LIMIT 15
+    """).fetchall()
+
+    conn.close()
+
+    text = "<b>✉️ آخر المراسلات</b>\n\n"
+
+    if not rows:
+        text += "<b>لا توجد مراسلات.</b>"
+    else:
+        for row in rows:
+            name = row["first_name"] or "مستخدم"
+            section = row["section_name"] or "عام"
+
+            short = row["text"][:200]
+
+            text += (
+                f"🆔 <b>{row['id']}</b>\n"
+                f"👤 <b>{html.escape(name)}</b>\n"
+                f"📂 <b>{html.escape(section)}</b>\n"
+                f"📝 {html.escape(short)}\n\n"
+            )
+
+    await update.callback_query.edit_message_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "⬅️ لوحة الإدارة",
+                    callback_data="ADMIN:HOME"
+                )
+            ]
+        ])
+    )
+
+
+# ============================================================
+# ADMIN RATINGS
+# ============================================================
+
+async def admin_ratings(update, context):
+    conn = db_connect()
+
+    rows = conn.execute("""
+        SELECT
+            rating,
+            COUNT(*) AS total
+        FROM ratings
+        GROUP BY rating
+        ORDER BY rating DESC
+    """).fetchall()
+
+    avg = conn.execute(
+        "SELECT AVG(rating) FROM ratings"
+    ).fetchone()[0]
+
+    conn.close()
+
+    text = (
+        "<b>⭐ التقييمات</b>\n\n"
+        f"<b>المتوسط:</b> "
+        f"{avg:.2f}" if avg else
+        "<b>المتوسط:</b> 0"
+    )
+
+    text += "\n\n"
+
+    for row in rows:
+        text += (
+            f"{'⭐' * row['rating']} "
+            f"<b>{row['total']}</b>\n"
+        )
+
+    await update.callback_query.edit_message_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "⬅️ لوحة الإدارة",
+                    callback_data="ADMIN:HOME"
+                )
+            ]
+        ])
+    )
+
+
+# ============================================================
+# ADMIN SETTINGS
+# ============================================================
+
+async def admin_settings(update, context):
+    welcome = get_setting("welcome_enabled", "1")
+    new_users = get_setting("new_user_notifications", "1")
+    rating = get_setting("rating_enabled", "1")
+    notes = get_setting("notes_enabled", "1")
+
+    def status(v):
+        return "🟢 يعمل" if v == "1" else "🔴 متوقف"
+
+    await update.callback_query.edit_message_text(
+        "<b>⚙️ إعدادات البوت</b>\n\n"
+        f"👋 الترحيب: <b>{status(welcome)}</b>\n"
+        f"🆕 إشعار مستخدم جديد: <b>{status(new_users)}</b>\n"
+        f"⭐ التقييم: <b>{status(rating)}</b>\n"
+        f"✉️ الملاحظات: <b>{status(notes)}</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "👋 الترحيب",
+                    callback_data="SETTING:welcome_enabled"
+                ),
+                InlineKeyboardButton(
+                    "🆕 إشعارات",
+                    callback_data="SETTING:new_user_notifications"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⭐ التقييم",
+                    callback_data="SETTING:rating_enabled"
+                ),
+                InlineKeyboardButton(
+                    "✉️ الملاحظات",
+                    callback_data="SETTING:notes_enabled"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬅️ لوحة الإدارة",
+                    callback_data="ADMIN:HOME"
+                )
+            ]
+        ])
+    )
+
+
+# ============================================================
+# CALLBACK HANDLER
+# ============================================================
+
+async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+
+    try:
+        await query.answer()
+    except Exception:
+        pass
+
+    user = update.effective_user
+    data = query.data
+
+    # --------------------------------------------------------
+    # MAIN
+    # --------------------------------------------------------
+
+    if data == "MAIN":
+        context.user_data.clear()
+        await send_main_menu(update, context, edit=True)
+        return
+
+    # --------------------------------------------------------
+    # CANCEL
+    # --------------------------------------------------------
+
+    if data == "CANCEL":
+        context.user_data.clear()
+
+        await query.edit_message_text(
+            "<b>❌ تم الإلغاء.</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_keyboard(user.id)
+        )
+        return
+
+    # --------------------------------------------------------
+    # OPEN SECTION
+    # --------------------------------------------------------
+
+    if data.startswith("OPEN:"):
+        section_id = int(data.split(":")[1])
+        await show_section(update, context, section_id, True)
+        return
+
+    # --------------------------------------------------------
+    # BACK
+    # --------------------------------------------------------
+
+    if data.startswith("BACK:"):
+        section_id = int(data.split(":")[1])
+        section = get_section(section_id)
+
+        if not section or section["parent_id"] is None:
+            await send_main_menu(update, context, True)
+        else:
+            await show_section(
+                update,
+                context,
+                section["parent_id"],
+                True
+            )
+        return
+
+    # --------------------------------------------------------
+    # FAVORITE
+    # --------------------------------------------------------
+
+    if data.startswith("FAV:"):
+        section_id = int(data.split(":")[1])
+
+        result = toggle_favorite(
+            user.id,
+            section_id
+        )
+
+        await query.answer(
+            "⭐ تمت الإضافة للمفضلة."
+            if result
+            else "تمت الإزالة من المفضلة.",
+            show_alert=True
+        )
+
+        await show_section(
+            update,
+            context,
+            section_id,
+            True
+        )
+        return
+
+    # --------------------------------------------------------
+    # NOTE
+    # --------------------------------------------------------
+
+    if data.startswith("NOTE:"):
+        section_id = int(data.split(":")[1])
+        await start_note(update, context, section_id)
+        return
+
+    # --------------------------------------------------------
+    # RATE
+    # --------------------------------------------------------
+
+    if data.startswith("RATE:"):
+        rating = int(data.split(":")[1])
+        await save_rating(update, context, rating)
+        return
+
+    # --------------------------------------------------------
+    # SYSTEM
+    # --------------------------------------------------------
+
+    if data.startswith("SYS:"):
+        key = data.split(":", 1)[1]
+        await system_button(update, context, key)
+        return
+
+    # --------------------------------------------------------
+    # ADMIN HOME
+    # --------------------------------------------------------
+
+    if data == "ADMIN:HOME":
+        if not is_admin(user.id):
+            return
+
+        context.user_data.clear()
+        await show_admin(update, context)
+        return
+
+    # --------------------------------------------------------
+    # ADMIN BUTTONS
+    # --------------------------------------------------------
+
+    if data == "ADMIN:BUTTONS":
+        if is_admin(user.id):
+            await editor_home(update, context)
+        return
+
+    # --------------------------------------------------------
+    # ADMIN CONTENT
+    # --------------------------------------------------------
+
+    if data == "ADMIN:CONTENT":
+        if is_admin(user.id):
+            await content_editor(update, context)
+        return
+
+    # --------------------------------------------------------
+    # ADMIN STATS
+    # --------------------------------------------------------
+
+    if data == "ADMIN:STATS":
+        if is_admin(user.id):
+            await admin_stats(update, context)
+        return
+
+    # --------------------------------------------------------
+    # ADMIN NOTES
+    # --------------------------------------------------------
+
+    if data == "ADMIN:NOTES":
+        if is_admin(user.id):
+            await admin_notes(update, context)
+        return
+
+    # --------------------------------------------------------
+    # ADMIN RATINGS
+    # --------------------------------------------------------
+
+    if data == "ADMIN:RATINGS":
+        if is_admin(user.id):
+            await admin_ratings(update, context)
+        return
+
+    # --------------------------------------------------------
+    # ADMIN SETTINGS
+    # --------------------------------------------------------
+
+    if data == "ADMIN:SETTINGS":
+        if is_admin(user.id):
+            await admin_settings(update, context)
+        return
+
+    # --------------------------------------------------------
+    # ROOT EDITOR
+    # --------------------------------------------------------
+
+    if data == "ED:ROOT":
+        if is_admin(user.id):
+            await edit_root_screen(update, context)
+        return
+
+    # --------------------------------------------------------
+    # SYSTEM EDITOR
+    # --------------------------------------------------------
+
+    if data == "ED:SYSTEM":
+        if is_admin(user.id):
+            await system_editor(update, context)
+        return
+
+    # --------------------------------------------------------
+    # SECTION EDITOR
+    # --------------------------------------------------------
+
+    if data.startswith("EDSEC:"):
+        if is_admin(user.id):
+            section_id = int(data.split(":")[1])
+            await edit_section_screen(update, context, section_id)
+        return
+
+    # --------------------------------------------------------
+    # ADD SECTION
+    # --------------------------------------------------------
+
+    if data.startswith("ADD:"):
+        if is_admin(user.id):
+            value = data.split(":", 1)[1]
+            await ask_add_section(
+                update,
+                context,
+                value
+            )
+        return
+
+    # --------------------------------------------------------
+    # RENAME
+    # --------------------------------------------------------
+
+    if data.startswith("RENAME:"):
+        if is_admin(user.id):
+            section_id = int(data.split(":")[1])
+            await ask_rename(
+                update,
+                context,
+                section_id
+            )
+        return
+
+    # --------------------------------------------------------
+    # ICON
+    # --------------------------------------------------------
+
+    if data.startswith("ICON:"):
+        if is_admin(user.id):
+            section_id = int(data.split(":")[1])
+            await ask_icon(
+                update,
+                context,
+                section_id
+            )
+        return
+
+    # --------------------------------------------------------
+    # DELETE
+    # --------------------------------------------------------
+
+    if data.startswith("DELETE:"):
+        if is_admin(user.id):
+            section_id = int(data.split(":")[1])
+            await confirm_delete(
+                update,
+                context,
+                section_id
+            )
+        return
+
+    if data.startswith("DELETE_YES:"):
+        if is_admin(user.id):
+            section_id = int(data.split(":")[1])
+            delete_section(section_id)
+
+            await query.edit_message_text(
+                "<b>✅ تم حذف القسم ومحتوياته.</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton(
+                            "🧩 محرر الأزرار",
+                            callback_data="ADMIN:BUTTONS"
+                        ],
+                        InlineKeyboardButton(
+                            "🏠 الرئيسية",
+                            callback_data="MAIN"
+                        )
+                    ]
+                ])
+            )
+        return
+
+    # --------------------------------------------------------
+    # MOVE
+    # --------------------------------------------------------
+
+    if data.startswith("MOVE:"):
+        if is_admin(user.id):
+            section_id = int(data.split(":")[1])
+            await move_screen(
+                update,
+                context,
+                section_id
+            )
+        return
+
+    if data.startswith("MOVE_TO:"):
+        if is_admin(user.id):
+            _, source, target = data.split(":")
+            await confirm_move(
+                update,
+                context,
+                int(source),
+                target
+            )
+        return
+
+    if data.startswith("MOVE_YES:"):
+        if is_admin(user.id):
+            _, source, target = data.split(":")
+            perform_move(
+                int(source),
+                target
+            )
+
+            await query.edit_message_text(
+                "<b>✅ تم نقل القسم بنجاح.</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton(
+                            "🧩 محرر الأزرار",
+                            callback_data="ADMIN:BUTTONS"
+                        )
+                    ]
+                ])
+            )
+        return
+
+    # --------------------------------------------------------
+    # MERGE
+    # --------------------------------------------------------
+
+    if data.startswith("MERGE:"):
+        if is_admin(user.id):
+            section_id = int(data.split(":")[1])
+            await merge_screen(
+                update,
+                context,
+                section_id
+            )
+        return
+
+    if data.startswith("MERGE_TO:"):
+        if is_admin(user.id):
+            _, source, target = data.split(":")
+            await confirm_merge(
+                update,
+                context,
+                int(source),
+                int(target)
+            )
+        return
+
+    if data.startswith("MERGE_YES:"):
+        if is_admin(user.id):
+            _, source, target = data.split(":")
+            perform_merge(
+                int(source),
+                int(target)
+            )
+
+            await query.edit_message_text(
+                "<b>✅ تم دمج الأقسام بنجاح.</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton(
+                            "🧩 محرر الأزرار",
+                            callback_data="ADMIN:BUTTONS"
+                        )
+                    ]
+                ])
+            )
+        return
+
+    # --------------------------------------------------------
+    # REORDER
+    # --------------------------------------------------------
+
+    if data.startswith("UP:"):
+        if is_admin(user.id):
+            section_id = int(data.split(":")[1])
+            reorder(section_id, "up")
+            await edit_section_screen(
+                update,
+                context,
+                section_id
+            )
+        return
+
+    if data.startswith("DOWN:"):
+        if is_admin(user.id):
+            section_id = int(data.split(":")[1])
+            reorder(section_id, "down")
+            await edit_section_screen(
+                update,
+                context,
+                section_id
+            )
+        return
+
+    # --------------------------------------------------------
+    # TOGGLE
+    # --------------------------------------------------------
+
+    if data.startswith("TOGGLE:"):
+        if is_admin(user.id):
+            section_id = int(data.split(":")[1])
+
+            conn = db_connect()
+
+            conn.execute("""
+                UPDATE sections
+                SET enabled =
+                    CASE
+                        WHEN enabled=1 THEN 0
+                        ELSE 1
+                    END
+                WHERE id=?
+            """, (section_id,))
+
+            conn.commit()
+            conn.close()
+
+            await edit_section_screen(
+                update,
+                context,
+                section_id
+            )
+        return
+
+    # --------------------------------------------------------
+    # CONTENT BROWSE
+    # --------------------------------------------------------
+
+    if data.startswith("CONTENT:BROWSE:"):
+        if is_admin(user.id):
+            value = data.split(":")[-1]
+            await content_browse(
+                update,
+                context,
+                value
+            )
+        return
+
+    if data.startswith("CONTENT:OPEN:"):
+        if is_admin(user.id):
+            section_id = int(data.split(":")[-1])
+            await content_section(
+                update,
+                context,
+                section_id
+            )
+        return
+
+    # --------------------------------------------------------
+    # ADD CONTENT
+    # --------------------------------------------------------
+
+    if data.startswith("CONTENT:ADD:"):
+        if is_admin(user.id):
+            section_id = int(data.split(":")[-1])
+            await ask_add_content(
+                update,
+                context,
+                section_id
+            )
+        return
+
+    # --------------------------------------------------------
+    # EDIT CONTENT
+    # --------------------------------------------------------
+
+    if data.startswith("CONTENT:EDIT:"):
+        if is_admin(user.id):
+            content_id = int(data.split(":")[-1])
+            await ask_edit_content(
+                update,
+                context,
+                content_id
+            )
+        return
+
+    # --------------------------------------------------------
+    # REPLACE CONTENT
+    # --------------------------------------------------------
+
+    if data.startswith("CONTENT:REPLACE:"):
+        if is_admin(user.id):
+            content_id = int(data.split(":")[-1])
+            await replace_content(
+                update,
+                context,
+                content_id
+            )
+        return
+
+    # --------------------------------------------------------
+    # DELETE CONTENT
+    # --------------------------------------------------------
+
+    if data.startswith("CONTENT:DELETE:"):
+        if is_admin(user.id):
+            content_id = int(data.split(":")[-1])
+            await confirm_delete_content(
+                update,
+                context,
+                content_id
+            )
+        return
+
+    if data.startswith("CONTENT:DELETE_YES:"):
+        if is_admin(user.id):
+            content_id = int(data.split(":")[-1])
+
+            conn = db_connect()
+
+            row = conn.execute("""
+                SELECT section_id
+                FROM contents
+                WHERE id=?
+            """, (content_id,)).fetchone()
+
+            section_id = row["section_id"] if row else None
+
+            conn.execute(
+                "DELETE FROM contents WHERE id=?",
+                (content_id,)
+            )
+
+            conn.commit()
+            conn.close()
+
+            if section_id:
+                await content_section(
+                    update,
+                    context,
+                    section_id
+                )
+        return
+
+    # --------------------------------------------------------
+    # SYSTEM EDIT
+    # --------------------------------------------------------
+
+    if data.startswith("SYS_EDIT:"):
+        if is_admin(user.id):
+            key = data.split(":", 1)[1]
+            await system_button_edit(
+                update,
+                context,
+                key
+            )
+        return
+
+    if data.startswith("SYS_RENAME:"):
+        if is_admin(user.id):
+            key = data.split(":", 1)[1]
+
+            context.user_data["state"] = "system_rename"
+            context.user_data["system_key"] = key
+
+            await query.edit_message_text(
+                "<b>✏️ أرسل الاسم الجديد للزر:</b>\n\n"
+                "<b>للإلغاء:</b> /cancel",
+                parse_mode=ParseMode.HTML
+            )
+        return
+
+    if data.startswith("SYS_ICON:"):
+        if is_admin(user.id):
+            key = data.split(":", 1)[1]
+
+            context.user_data["state"] = "system_icon"
+            context.user_data["system_key"] = key
+
+            await query.edit_message_text(
+                "<b>🎨 أرسل الأيقونة الجديدة:</b>",
+                parse_mode=ParseMode.HTML
+            )
+        return
+
+    if data.startswith("SYS_TOGGLE:"):
+        if is_admin(user.id):
+            key = data.split(":", 1)[1]
+
+            conn = db_connect()
+
+            conn.execute("""
+                UPDATE system_buttons
+                SET enabled =
+                    CASE
+                        WHEN enabled=1 THEN 0
+                        ELSE 1
+                    END
+                WHERE button_key=?
+            """, (key,))
+
+            conn.commit()
+            conn.close()
+
+            await system_button_edit(
+                update,
+                context,
+                key
+            )
+        return
+
+    if data.startswith("SYS_UP:") or data.startswith("SYS_DOWN:"):
+        if is_admin(user.id):
+            key = data.split(":", 1)[1]
+            direction = (
+                "up"
+                if data.startswith("SYS_UP:")
+                else "down"
+            )
+
+            conn = db_connect()
+
+            rows = conn.execute("""
+                SELECT *
+                FROM system_buttons
+                ORDER BY sort_order,id
+            """).fetchall()
+
+            index = next(
+                (
+                    i for i, row in enumerate(rows)
+                    if row["button_key"] == key
+                ),
+                None
+            )
+
+            if index is not None:
+                other_index = (
+                    index - 1
+                    if direction == "up"
+                    else index + 1
+                )
+
+                if 0 <= other_index < len(rows):
+                    a = rows[index]
+                    b = rows[other_index]
+
+                    conn.execute("""
+                        UPDATE system_buttons
+                        SET sort_order=?
+                        WHERE button_key=?
+                    """, (
+                        b["sort_order"],
+                        a["button_key"]
+                    ))
+
+                    conn.execute("""
+                        UPDATE system_buttons
+                        SET sort_order=?
+                        WHERE button_key=?
+                    """, (
+                        a["sort_order"],
+                        b["button_key"]
+                    ))
+
+                    conn.commit()
+
+            conn.close()
+
+            await system_button_edit(
+                update,
+                context,
+                key
+            )
+        return
+
+    # --------------------------------------------------------
+    # SETTINGS
+    # --------------------------------------------------------
+
+    if data.startswith("SETTING:"):
+        if is_admin(user.id):
+            key = data.split(":", 1)[1]
+
+            current = get_setting(key, "1")
+
+            set_setting(
+                key,
+                "0" if current == "1" else "1"
+            )
+
+            await admin_settings(
+                update,
+                context
+            )
+        return
+
+
+# ============================================================
+# TEXT / CONTENT HANDLER
+# ============================================================
+
+async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
 
     if not update.message:
         return
 
-    user = update.effective_user
-    uid = user.id
-    text = update.message.text.strip()
-
-    new_user = save_user(user)
-
-    # ---------------------------------------------
-    # MAINTENANCE
-    # ---------------------------------------------
-
-    if (
-        get_setting("maintenance") == "1"
-        and not is_admin(uid)
-    ):
-
-        await update.message.reply_text(
-            "🛠 البوت حالياً في وضع الصيانة."
-        )
-
-        return
-
     state = context.user_data.get("state")
 
-    # ---------------------------------------------
+    # --------------------------------------------------------
     # CANCEL
-    # ---------------------------------------------
+    # --------------------------------------------------------
 
-    if text == "❌ إلغاء":
-
+    if update.message.text == "/cancel":
         context.user_data.clear()
 
         await update.message.reply_text(
-            "❌ تم إلغاء العملية.",
+            "<b>❌ تم إلغاء العملية.</b>",
+            parse_mode=ParseMode.HTML,
             reply_markup=(
                 admin_keyboard()
-                if is_admin(uid)
-                else main_keyboard(uid)
+                if is_admin(user.id)
+                else main_keyboard(user.id)
             )
         )
-
         return
 
-    # ---------------------------------------------
-    # MAIN
-    # ---------------------------------------------
+    # --------------------------------------------------------
+    # ADMIN ONLY
+    # --------------------------------------------------------
 
-    if text == "🏠 القائمة الرئيسية":
+    if state and is_admin(user.id):
 
-        context.user_data.clear()
+        # ----------------------------------------------------
+        # ADD SECTION
+        # ----------------------------------------------------
 
-        await update.message.reply_text(
-            get_setting(
-                "start_text",
-                START_TEXT
-            ),
-            reply_markup=main_keyboard(uid)
-        )
-
-        return
-
-    # ---------------------------------------------
-    # BACK / EXIT
-    # ---------------------------------------------
-
-    if text in (
-        "🔙 رجوع",
-        "🔙 خروج من القسم"
-    ):
-
-        parent_id = context.user_data.get(
-            "parent_id",
-            0
-        )
-
-        if parent_id:
-
-            row = get_button(parent_id)
-
-            if row:
-
-                previous = row[1]
-
-                if previous:
-
-                    previous_row = get_button(
-                        previous
-                    )
-
-                    await show_section(
-                        update,
-                        context,
-                        previous,
-                        previous_row[2]
-                        if previous_row
-                        else "القسم"
-                    )
-
-                    return
-
-                await show_section(
-                    update,
-                    context,
-                    0,
-                    "📚 الأقسام"
+        if state == "add_section":
+            if not update.message.text:
+                await update.message.reply_text(
+                    "<b>أرسل اسم القسم كنص.</b>",
+                    parse_mode=ParseMode.HTML
                 )
-
                 return
 
-        await update.message.reply_text(
-            get_setting(
-                "start_text",
-                START_TEXT
-            ),
-            reply_markup=main_keyboard(uid)
-        )
+            name = update.message.text.strip()
 
-        return
+            if not name:
+                return
 
-    # =====================================================
-    # ADMIN STATES
-    # =====================================================
+            parent_id = context.user_data["parent_id"]
 
-    if is_admin(uid):
-
-        # ---------------------------------------------
-        # ADD TITLE
-        # ---------------------------------------------
-
-        if state == "add_title":
-
-            context.user_data["new_title"] = text
-
-            await choose_parent(
-                update,
-                context
+            section_id = create_section(
+                parent_id,
+                name
             )
-
-            return
-
-        # ---------------------------------------------
-        # CHOOSE PARENT
-        # ---------------------------------------------
-
-        if state == "choose_parent":
-
-            title = context.user_data.get(
-                "new_title"
-            )
-
-            if text == "🏠 القسم الرئيسي":
-
-                parent_id = 0
-
-            else:
-
-                parent_id = parse_button_id(
-                    text
-                )
-
-                if not parent_id:
-
-                    await update.message.reply_text(
-                        "❌ اختر قسماً من القائمة."
-                    )
-
-                    return
-
-                if not get_button(parent_id):
-
-                    await update.message.reply_text(
-                        "❌ القسم غير موجود."
-                    )
-
-                    return
-
-            with closing(get_db()) as conn:
-
-                position = conn.execute(
-                    """
-                    SELECT COALESCE(
-                        MAX(position),-1
-                    )+1
-                    FROM buttons
-                    WHERE parent_id=?
-                    """,
-                    (parent_id,)
-                ).fetchone()[0]
-
-                conn.execute(
-                    """
-                    INSERT INTO buttons(
-                        parent_id,
-                        title,
-                        position
-                    )
-                    VALUES(?,?,?)
-                    """,
-                    (
-                        parent_id,
-                        title,
-                        position
-                    )
-                )
-
-                conn.commit()
 
             context.user_data.clear()
 
             await update.message.reply_text(
-                f"✅ تمت إضافة القسم:\n\n"
-                f"**{title}**",
-                parse_mode="Markdown",
-                reply_markup=button_editor_keyboard()
+                "<b>✅ تم إنشاء القسم بنجاح.</b>\n\n"
+                f"<b>{html.escape(name)}</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton(
+                            "🧩 محرر الأزرار",
+                            callback_data="ADMIN:BUTTONS"
+                        ],
+                        InlineKeyboardButton(
+                            "🏠 الرئيسية",
+                            callback_data="MAIN"
+                        )
+                    ]
+                ])
             )
-
             return
 
-        # ---------------------------------------------
-        # EDIT SELECT
-        # ---------------------------------------------
+        # ----------------------------------------------------
+        # RENAME
+        # ----------------------------------------------------
 
-        if state == "edit_select":
+        if state == "rename_section":
+            name = (
+                update.message.text or ""
+            ).strip()
 
-            bid = parse_button_id(text)
-
-            row = get_button(bid)
-
-            if not row:
-
-                await update.message.reply_text(
-                    "❌ اختر قسماً صحيحاً."
-                )
-
+            if not name:
                 return
 
-            context.user_data["edit_id"] = bid
-            context.user_data["state"] = "edit_title"
+            section_id = context.user_data["section_id"]
 
-            await update.message.reply_text(
-                f"✏️ الاسم الحالي:\n"
-                f"**{row[2]}**\n\n"
-                "أرسل الاسم الجديد:",
-                parse_mode="Markdown",
-                reply_markup=cancel_keyboard()
-            )
+            conn = db_connect()
 
-            return
+            conn.execute("""
+                UPDATE sections
+                SET name=?
+                WHERE id=?
+            """, (
+                name,
+                section_id
+            ))
 
-        # ---------------------------------------------
-        # EDIT TITLE
-        # ---------------------------------------------
-
-        if state == "edit_title":
-
-            bid = context.user_data.get(
-                "edit_id"
-            )
-
-            with closing(get_db()) as conn:
-
-                conn.execute(
-                    """
-                    UPDATE buttons
-                    SET title=?
-                    WHERE id=?
-                    """,
-                    (
-                        text,
-                        bid
-                    )
-                )
-
-                conn.commit()
+            conn.commit()
+            conn.close()
 
             context.user_data.clear()
 
             await update.message.reply_text(
-                "✅ تم تعديل القسم بنجاح.",
-                reply_markup=button_editor_keyboard()
+                "<b>✅ تم تعديل اسم القسم.</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton(
+                            "🧩 محرر الأزرار",
+                            callback_data="ADMIN:BUTTONS"
+                        )
+                    ]
+                ])
             )
-
             return
 
-        # ---------------------------------------------
-        # MOVE SELECT
-        # ---------------------------------------------
+        # ----------------------------------------------------
+        # ICON
+        # ----------------------------------------------------
 
-        if state == "move_select":
+        if state == "icon_section":
+            icon = (
+                update.message.text or ""
+            ).strip()
 
-            bid = parse_button_id(text)
-
-            if not get_button(bid):
-
-                await update.message.reply_text(
-                    "❌ اختر قسماً صحيحاً."
-                )
-
+            if not icon:
                 return
 
-            context.user_data["move_id"] = bid
+            section_id = context.user_data["section_id"]
 
-            buttons = get_all_buttons()
+            conn = db_connect()
 
-            rows = [
-                [
-                    KeyboardButton(
-                        "🏠 القسم الرئيسي"
-                    )
-                ]
+            conn.execute("""
+                UPDATE sections
+                SET icon=?
+                WHERE id=?
+            """, (
+                icon[:10],
+                section_id
+            ))
+
+            conn.commit()
+            conn.close()
+
+            context.user_data.clear()
+
+            await update.message.reply_text(
+                "<b>✅ تم تعديل الأيقونة.</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton(
+                            "🧩 محرر الأزرار",
+                            callback_data="ADMIN:BUTTONS"
+                        )
+                    ]
+                ])
+            )
+            return
+
+        # ----------------------------------------------------
+        # ADD CONTENT
+        # ----------------------------------------------------
+
+        if state == "add_content":
+            section_id = context.user_data[
+                "content_section_id"
             ]
 
-            for row in buttons:
-
-                if row[0] != bid:
-
-                    rows.append([
-                        KeyboardButton(
-                            button_text(row)
-                        )
-                    ])
-
-            rows.append([
-                KeyboardButton("❌ إلغاء")
-            ])
-
-            context.user_data["state"] = "move_destination"
-
-            await update.message.reply_text(
-                "📦 اختر المكان الجديد للقسم:",
-                reply_markup=keyboard(rows)
+            content_type = detect_content_type(
+                update.message
             )
 
-            return
-
-        # ---------------------------------------------
-        # MOVE DESTINATION
-        # ---------------------------------------------
-
-        if state == "move_destination":
-
-            bid = context.user_data.get(
-                "move_id"
+            content_id = save_content(
+                section_id,
+                update.message.chat_id,
+                update.message.message_id,
+                content_type
             )
-
-            if text == "🏠 القسم الرئيسي":
-
-                destination = 0
-
-            else:
-
-                destination = parse_button_id(
-                    text
-                )
-
-                if destination is None:
-
-                    await update.message.reply_text(
-                        "❌ اختر المكان من القائمة."
-                    )
-
-                    return
-
-            context.user_data[
-                "move_destination"
-            ] = destination
-
-            context.user_data[
-                "state"
-            ] = "move_confirm"
-
-            row = get_button(bid)
-
-            await update.message.reply_text(
-                "⚠️ تأكيد النقل\n\n"
-                f"القسم: **{row[2]}**\n\n"
-                "هل تريد تنفيذ عملية النقل؟",
-                parse_mode="Markdown",
-                reply_markup=keyboard([
-                    [
-                        KeyboardButton(
-                            "✅ نعم، نقل"
-                        )
-                    ],
-                    [
-                        KeyboardButton(
-                            "❌ إلغاء"
-                        )
-                    ]
-                ])
-            )
-
-            return
-
-        # ---------------------------------------------
-        # MOVE CONFIRM
-        # ---------------------------------------------
-
-        if state == "move_confirm":
-
-            if text == "✅ نعم، نقل":
-
-                bid = context.user_data.get(
-                    "move_id"
-                )
-
-                destination = context.user_data.get(
-                    "move_destination"
-                )
-
-                # منع النقل داخل أحد الأبناء
-                current = destination
-
-                invalid = False
-
-                while current:
-
-                    if current == bid:
-
-                        invalid = True
-                        break
-
-                    r = get_button(current)
-
-                    current = r[1] if r else 0
-
-                if invalid:
-
-                    await update.message.reply_text(
-                        "❌ لا يمكن نقل القسم داخل قسم تابع له.",
-                        reply_markup=button_editor_keyboard()
-                    )
-
-                    context.user_data.clear()
-
-                    return
-
-                with closing(get_db()) as conn:
-
-                    position = conn.execute(
-                        """
-                        SELECT COALESCE(
-                            MAX(position),-1
-                        )+1
-                        FROM buttons
-                        WHERE parent_id=?
-                        """,
-                        (destination,)
-                    ).fetchone()[0]
-
-                    conn.execute(
-                        """
-                        UPDATE buttons
-                        SET parent_id=?,position=?
-                        WHERE id=?
-                        """,
-                        (
-                            destination,
-                            position,
-                            bid
-                        )
-                    )
-
-                    conn.commit()
-
-                context.user_data.clear()
-
-                await update.message.reply_text(
-                    "✅ تم نقل القسم بنجاح.",
-                    reply_markup=button_editor_keyboard()
-                )
-
-                return
-
-        # ---------------------------------------------
-        # DELETE SELECT
-        # ---------------------------------------------
-
-        if state == "delete_select":
-
-            bid = parse_button_id(text)
-
-            row = get_button(bid)
-
-            if not row:
-
-                await update.message.reply_text(
-                    "❌ اختر قسماً صحيحاً."
-                )
-
-                return
-
-            context.user_data[
-                "delete_id"
-            ] = bid
-
-            context.user_data[
-                "state"
-            ] = "delete_confirm"
-
-            await update.message.reply_text(
-                "⚠️ تأكيد الحذف\n\n"
-                f"سيتم حذف القسم:\n"
-                f"**{row[2]}**\n\n"
-                "وسيتم حذف الأقسام الفرعية والمحتوى المرتبط بها أيضاً.\n\n"
-                "هل أنت متأكد؟",
-                parse_mode="Markdown",
-                reply_markup=keyboard([
-                    [
-                        KeyboardButton(
-                            "✅ نعم، حذف"
-                        )
-                    ],
-                    [
-                        KeyboardButton(
-                            "❌ إلغاء"
-                        )
-                    ]
-                ])
-            )
-
-            return
-
-        # ---------------------------------------------
-        # DELETE CONFIRM
-        # ---------------------------------------------
-
-        if state == "delete_confirm":
-
-            if text == "✅ نعم، حذف":
-
-                bid = context.user_data.get(
-                    "delete_id"
-                )
-
-                delete_tree(bid)
-
-                context.user_data.clear()
-
-                await update.message.reply_text(
-                    "🗑 تم حذف القسم ومحتواه وأقسامه الفرعية.",
-                    reply_markup=button_editor_keyboard()
-                )
-
-                return
-
-        # ---------------------------------------------
-        # POST SELECT
-        # ---------------------------------------------
-
-        if state in (
-            "post_add_select",
-            "post_edit_select"
-        ):
-
-            bid = parse_button_id(text)
-
-            row = get_button(bid)
-
-            if not row:
-
-                await update.message.reply_text(
-                    "❌ اختر قسماً صحيحاً."
-                )
-
-                return
-
-            context.user_data[
-                "selected_button"
-            ] = bid
-
-            context.user_data[
-                "state"
-            ] = (
-                "post_add"
-                if state == "post_add_select"
-                else "post_edit"
-            )
-
-            await update.message.reply_text(
-                "📥 أرسل المحتوى الآن.\n\n"
-                "يمكنك إرسال أي نوع من المحتوى:\n"
-                "📄 ملف\n"
-                "🖼 صورة\n"
-                "🎬 فيديو\n"
-                "🎵 صوت\n"
-                "📝 نص\n"
-                "وغيرها.\n\n"
-                "البوت يتعرف عليه تلقائياً.",
-                reply_markup=cancel_keyboard()
-            )
-
-            return
-
-        # ---------------------------------------------
-        # POST DELETE
-        # ---------------------------------------------
-
-        if state == "post_delete_select":
-
-            bid = parse_button_id(text)
-
-            if not get_button(bid):
-
-                await update.message.reply_text(
-                    "❌ اختر قسماً صحيحاً."
-                )
-
-                return
-
-            if not post_exists(bid):
-
-                context.user_data.clear()
-
-                await update.message.reply_text(
-                    "❌ لا يوجد محتوى لهذا القسم.",
-                    reply_markup=post_editor_keyboard()
-                )
-
-                return
-
-            context.user_data[
-                "delete_post_id"
-            ] = bid
-
-            context.user_data[
-                "state"
-            ] = "post_delete_confirm"
-
-            row = get_button(bid)
-
-            await update.message.reply_text(
-                "⚠️ تأكيد حذف المحتوى\n\n"
-                f"القسم: **{row[2]}**\n\n"
-                "هل تريد حذف المحتوى؟",
-                parse_mode="Markdown",
-                reply_markup=keyboard([
-                    [
-                        KeyboardButton(
-                            "✅ نعم، حذف"
-                        )
-                    ],
-                    [
-                        KeyboardButton(
-                            "❌ إلغاء"
-                        )
-                    ]
-                ])
-            )
-
-            return
-
-        # ---------------------------------------------
-        # DELETE POST
-        # ---------------------------------------------
-
-        if state == "post_delete_confirm":
-
-            if text == "✅ نعم، حذف":
-
-                bid = context.user_data.get(
-                    "delete_post_id"
-                )
-
-                with closing(get_db()) as conn:
-
-                    conn.execute(
-                        """
-                        DELETE FROM posts
-                        WHERE button_id=?
-                        """,
-                        (bid,)
-                    )
-
-                    conn.commit()
-
-                context.user_data.clear()
-
-                await update.message.reply_text(
-                    "🗑 تم حذف المحتوى.",
-                    reply_markup=post_editor_keyboard()
-                )
-
-                return
-
-        # ---------------------------------------------
-        # RATING
-        # ---------------------------------------------
-
-        if state == "rating":
-
-            ratings = {
-                "⭐": 1,
-                "⭐⭐": 2,
-                "⭐⭐⭐": 3,
-                "⭐⭐⭐⭐": 4,
-                "⭐⭐⭐⭐⭐": 5
-            }
-
-            if text in ratings:
-
-                await save_rating(
-                    update,
-                    context,
-                    ratings[text]
-                )
-
-                return
-
-        # ---------------------------------------------
-        # BROADCAST TEXT
-        # ---------------------------------------------
-
-        if state == "broadcast":
-
-            users = get_users()
-
-            success = 0
-            failed = 0
-
-            for target in users:
-
-                try:
-
-                    await context.bot.send_message(
-                        chat_id=target,
-                        text=text
-                    )
-
-                    success += 1
-
-                except Exception:
-
-                    failed += 1
 
             context.user_data.clear()
 
             await update.message.reply_text(
-                "📢 اكتمل الإرسال الجماعي.\n\n"
-                f"✅ نجح: {success}\n"
-                f"❌ فشل: {failed}",
-                reply_markup=admin_keyboard()
+                "<b>✅ تم حفظ المشاركة.</b>\n\n"
+                f"<b>النوع:</b> {html.escape(content_type)}\n"
+                f"<b>رقم المشاركة:</b> {content_id}\n\n"
+                "<b>عند ضغط المستخدم على القسم، "
+                "سيتم إرسال المحتوى تلقائياً.</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton(
+                            "📝 تعديل المشاركات",
+                            callback_data="ADMIN:CONTENT"
+                        ],
+                        InlineKeyboardButton(
+                            "🔐 لوحة الإدارة",
+                            callback_data="ADMIN:HOME"
+                        )
+                    ]
+                ])
             )
-
             return
 
-    # =====================================================
-    # USER FUNCTIONS
-    # =====================================================
+        # ----------------------------------------------------
+        # REPLACE CONTENT
+        # ----------------------------------------------------
 
-    if text == "📚 الأقسام":
+        if state == "replace_content":
+            content_id = context.user_data[
+                "replace_content_id"
+            ]
 
-        context.user_data.clear()
+            content_type = detect_content_type(
+                update.message
+            )
 
-        await show_section(
+            conn = db_connect()
+
+            conn.execute("""
+                UPDATE contents
+                SET source_chat_id=?,
+                    source_message_id=?,
+                    content_type=?
+                WHERE id=?
+            """, (
+                update.message.chat_id,
+                update.message.message_id,
+                content_type,
+                content_id
+            ))
+
+            conn.commit()
+            conn.close()
+
+            context.user_data.clear()
+
+            await update.message.reply_text(
+                "<b>✅ تم استبدال المحتوى بنجاح.</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton(
+                            "📝 تعديل المشاركات",
+                            callback_data="ADMIN:CONTENT"
+                        )
+                    ]
+                ])
+            )
+            return
+
+        # ----------------------------------------------------
+        # SYSTEM RENAME
+        # ----------------------------------------------------
+
+        if state == "system_rename":
+            label = (
+                update.message.text or ""
+            ).strip()
+
+            key = context.user_data["system_key"]
+
+            if label:
+                conn = db_connect()
+
+                conn.execute("""
+                    UPDATE system_buttons
+                    SET label=?
+                    WHERE button_key=?
+                """, (
+                    label,
+                    key
+                ))
+
+                conn.commit()
+                conn.close()
+
+            context.user_data.clear()
+
+            await update.message.reply_text(
+                "<b>✅ تم تعديل اسم الزر.</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton(
+                            "⚙️ أزرار النظام",
+                            callback_data="ED:SYSTEM"
+                        )
+                    ]
+                ])
+            )
+            return
+
+        # ----------------------------------------------------
+        # SYSTEM ICON
+        # ----------------------------------------------------
+
+        if state == "system_icon":
+            icon = (
+                update.message.text or ""
+            ).strip()
+
+            key = context.user_data["system_key"]
+
+            if icon:
+                conn = db_connect()
+
+                conn.execute("""
+                    UPDATE system_buttons
+                    SET icon=?
+                    WHERE button_key=?
+                """, (
+                    icon[:10],
+                    key
+                ))
+
+                conn.commit()
+                conn.close()
+
+            context.user_data.clear()
+
+            await update.message.reply_text(
+                "<b>✅ تم تعديل أيقونة الزر.</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton(
+                            "⚙️ أزرار النظام",
+                            callback_data="ED:SYSTEM"
+                        )
+                    ]
+                ])
+            )
+            return
+
+    # --------------------------------------------------------
+    # USER SECTION NOTE
+    # --------------------------------------------------------
+
+    if state == "section_note":
+        section_id = context.user_data.get(
+            "note_section_id"
+        )
+
+        if not update.message.text:
+            await update.message.reply_text(
+                "<b>أرسل الملاحظة كنص.</b>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        await save_note(
             update,
             context,
-            0,
-            "📚 الأقسام"
+            section_id,
+            update.message.text
         )
-
         return
 
-    if text == "⭐ المفضلة":
+    # --------------------------------------------------------
+    # GLOBAL NOTE
+    # --------------------------------------------------------
+
+    if state == "global_note":
+        if not update.message.text:
+            await update.message.reply_text(
+                "<b>أرسل الرسالة كنص.</b>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        conn = db_connect()
+
+        conn.execute("""
+            INSERT INTO notes
+            (user_id,section_id,text,created_at)
+            VALUES (?,?,?,?)
+        """, (
+            user.id,
+            None,
+            update.message.text,
+            now()
+        ))
+
+        conn.commit()
+        conn.close()
+
+        try:
+            await context.bot.send_message(
+                ADMIN_ID,
+                (
+                    "✉️ <b>رسالة جديدة من المستخدمين</b>\n\n"
+                    f"👤 <b>{html.escape(user.full_name)}</b>\n"
+                    f"🆔 <code>{user.id}</code>\n\n"
+                    f"📝 {html.escape(update.message.text)}"
+                ),
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logger.error("Global note error: %s", e)
 
         context.user_data.clear()
-
-        await favorites(
-            update,
-            context
-        )
-
-        return
-
-    if text == "🔥 الأكثر دخولاً":
-
-        context.user_data.clear()
-
-        await most_visited(
-            update,
-            context
-        )
-
-        return
-
-    if text == "🔍 البحث":
-
-        await search_start(
-            update,
-            context
-        )
-
-        return
-
-    if text == "⭐ تقييم البوت":
-
-        await rating_start(
-            update,
-            context
-        )
-
-        return
-
-    if text == "💬 مراسلة الأدمن":
-
-        await contact_start(
-            update,
-            context
-        )
-
-        return
-
-    if text == "ℹ️ حول البوت":
 
         await update.message.reply_text(
-            get_setting(
-                "about_text",
-                ABOUT_TEXT
-            ),
-            reply_markup=back_keyboard()
+            "<b>✅ وصلت رسالتك إلى الإدارة.</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_keyboard(user.id)
         )
-
         return
 
-    # =====================================================
-    # SEARCH
-    # =====================================================
 
-    if state == "search":
+# ============================================================
+# /ADMIN COMMAND
+# ============================================================
 
-        await search(
-            update,
-            context,
-            text
+async def admin_command(update, context):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text(
+            "<b>⛔ غير مسموح.</b>",
+            parse_mode=ParseMode.HTML
         )
-
         return
 
-    if state == "search_result":
+    context.user_data.clear()
 
-        bid = parse_button_id(text)
+    await show_admin(update, context)
 
-        results = context.user_data.get(
-            "search_results",
-            {}
-        )
 
-        if bid in results:
-
-            row = get_button(bid)
-
-            if row:
-
-                context.user_data.clear()
-
-                await open_button(
-                    update,
-                    context,
-                    row
-                )
-
-                return
-
-    # =====================================================
-    # FAVORITE MODE
-    # =====================================================
-
-    if context.user_data.get(
-        "favorite_mode"
-    ):
-
-        bid = parse_button_id(text)
-
-        if bid:
-
-            row = get_button(bid)
-
-            if row:
-
-                context.user_data.clear()
-
-                await open_button(
-                    update,
-                    context,
-                    row
-                )
-
-                return
-
-    # =====================================================
-    # POPULAR MODE
-    # =====================================================
-
-    if context.user_data.get(
-        "popular_mode"
-    ):
-
-        bid = parse_button_id(text)
-
-        if bid:
-
-            row = get_button(bid)
-
-            if row:
-
-                context.user_data.clear()
-
-                await open_button(
-                    update,
-                    context,
-                    row
-                )
-
-                return
-
-    # =====================================================
-    # DYNAMIC BUTTON
-    # =====================================================
-
-    parent_id = context.user_data.get(
-        "parent_id"
-    )
-
-    if parent_id is not None:
-
-        for row in get_children(parent_id):
-
-            if text == button_text(row):
-
-                await open_button(
-                    update,
-                    context,
-                    row
-                )
-
-                return
-
-    # =====================================================
-    # ADMIN MENU
-    # =====================================================
-
-    if is_admin(uid):
-
-        if text == "⚙️ لوحة الأدمن":
-
-            await admin_panel(
-                update,
-                context
-            )
-
-            return
-
-        if text == "🔘 محرر الأزرار":
-
-            await button_editor(
-                update,
-                context
-            )
-
-            return
-
-        if text == "📝 محرر المشاركات":
-
-            await post_editor(
-                update,
-                context
-            )
-
-            return
-
-        if text == "➕ إضافة قسم":
-
-            await add_button(
-                update,
-                context
-            )
-
-            return
-
-        if text == "✏️ تعديل قسم":
-
-            await edit_button(
-                update,
-                context
-            )
-
-            return
-
-        if text == "📦 نقل قسم":
-
-            await move_start(
-                update,
-                context
-            )
-
-            return
-
-        if text == "🗑 حذف قسم":
-
-            await delete_start(
-                update,
-                context
-            )
-
-            return
-
-        if text == "➕ إضافة مشاركة":
-
-            await select_post_button(
-                update,
-                context,
-                "post_add_select"
-            )
-
-            return
-
-        if text == "✏️ تعديل مشاركة":
-
-            await select_post_button(
-                update,
-                context,
-                "post_edit_select"
-            )
-
-            return
-
-        if text == "🗑 حذف مشاركة":
-
-            await select_post_button(
-                update,
-                context,
-                "post_delete_select"
-            )
-
-            return
-
-        if text == "📋 عرض الأقسام":
-
-            buttons = get_all_buttons()
-
-            if not buttons:
-
-                result = "📋 لا توجد أقسام."
-
-            else:
-
-                result = "📋 جميع الأقسام:\n\n"
-
-                for row in buttons:
-
-                    result += (
-                        f"🔘 {row[2]} 〔{row[0]}〕\n"
-                        f"↳ الأب: {row[1]}\n\n"
-                    )
-
-            await update.message.reply_text(
-                result,
-                reply_markup=button_editor_keyboard()
-            )
-
-            return
-
-        if text == "📋 المشاركات":
-
-            with closing(get_db()) as conn:
-
-                rows = conn.execute("""
-                    SELECT
-                        b.title,
-                        b.id,
-                        p.content_type
-                    FROM buttons b
-                    LEFT JOIN posts p
-                    ON p.button_id=b.id
-                    ORDER BY b.id
-                """).fetchall()
-
-            result = "📋 المشاركات:\n\n"
-
-            for title, bid, ctype in rows:
-
-                result += (
-                    f"🔘 {title} 〔{bid}〕\n"
-                    f"📦 {ctype or 'لا يوجد'}\n\n"
-                )
-
-            await update.message.reply_text(
-                result,
-                reply_markup=post_editor_keyboard()
-            )
-
-            return
-
-        if text == "📊 الإحصائيات":
-
-            with closing(get_db()) as conn:
-
-                users = conn.execute(
-                    "SELECT COUNT(*) FROM users"
-                ).fetchone()[0]
-
-                buttons = conn.execute(
-                    "SELECT COUNT(*) FROM buttons"
-                ).fetchone()[0]
-
-                posts = conn.execute(
-                    "SELECT COUNT(*) FROM posts"
-                ).fetchone()[0]
-
-                ratings = conn.execute(
-                    "SELECT COUNT(*) FROM ratings"
-                ).fetchone()[0]
-
-            await update.message.reply_text(
-                "📊 إحصائيات البوت\n\n"
-                f"👥 المستخدمون: {users}\n"
-                f"🔘 الأقسام: {buttons}\n"
-                f"📝 المشاركات: {posts}\n"
-                f"⭐ التقييمات: {ratings}",
-                reply_markup=admin_keyboard()
-            )
-
-            return
-
-        if text == "👥 المستخدمون":
-
-            users = get_users()
-
-            await update.message.reply_text(
-                f"👥 عدد المستخدمين:\n\n"
-                f"**{len(users)}** مستخدم",
-                parse_mode="Markdown",
-                reply_markup=admin_keyboard()
-            )
-
-            return
-
-        if text == "📢 إرسال جماعي":
-
-            context.user_data["state"] = "broadcast"
-
-            await update.message.reply_text(
-                "📢 الإرسال الجماعي\n\n"
-                "أرسل الرسالة أو الملف أو الصورة أو الفيديو.",
-                reply_markup=cancel_keyboard()
-            )
-
-            return
-
-        if text == "🛠 الصيانة":
-
-            current = get_setting(
-                "maintenance",
-                "0"
-            )
-
-            new_value = "0" if current == "1" else "1"
-
-            set_setting(
-                "maintenance",
-                new_value
-            )
-
-            status = (
-                "🛠 تم تفعيل الصيانة."
-                if new_value == "1"
-                else "🟢 تم إيقاف الصيانة."
-            )
-
-            await update.message.reply_text(
-                status,
-                reply_markup=admin_keyboard()
-            )
-
-            return
-
-        if text == "⚙️ إعدادات البوت":
-
-            await update.message.reply_text(
-                "⚙️ إعدادات البوت\n\n"
-                "حالياً يمكنك إدارة الإعدادات الأساسية "
-                "من قاعدة البيانات.",
-                reply_markup=admin_keyboard()
-            )
-
-            return
-
-    # =====================================================
-    # UNKNOWN
-    # =====================================================
-
-    await update.message.reply_text(
-        "❓ اختر أحد الخيارات الموجودة في الكيبورد.",
-        reply_markup=(
-            admin_keyboard()
-            if is_admin(uid)
-            else main_keyboard(uid)
-        )
-    )
-
-# =========================================================
-# POST EXISTS
-# =========================================================
-
-def post_exists(button_id):
-
-    with closing(get_db()) as conn:
-
-        return conn.execute(
-            """
-            SELECT 1
-            FROM posts
-            WHERE button_id=?
-            """,
-            (button_id,)
-        ).fetchone() is not None
-
-# =========================================================
-# ERROR
-# =========================================================
+# ============================================================
+# ERROR HANDLER
+# ============================================================
 
 async def error_handler(update, context):
-
-    logging.error(
-        "Bot error:",
+    logger.exception(
+        "Exception while handling update:",
         exc_info=context.error
     )
 
-# =========================================================
-# MAIN
-# =========================================================
+
+# ============================================================
+# START APPLICATION
+# ============================================================
 
 def main():
+    db_init()
 
-    if not TOKEN:
-
-        raise RuntimeError(
-            "BOT_TOKEN غير موجود.\n"
-            "أضف BOT_TOKEN داخل Environment Variables."
-        )
-
-    if not ADMIN_ID:
-
-        raise RuntimeError(
-            "ADMIN_ID غير صحيح."
-        )
-
-    app = (
-        ApplicationBuilder()
-        .token(TOKEN)
+    application = (
+        Application.builder()
+        .token(BOT_TOKEN)
         .build()
     )
 
-    app.add_handler(
-        CommandHandler(
-            "start",
-            start
-        )
+    application.add_handler(
+        CommandHandler("start", start)
     )
 
-    app.add_handler(
+    application.add_handler(
+        CommandHandler("admin", admin_command)
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(callbacks)
+    )
+
+    application.add_handler(
         MessageHandler(
-            (
-                filters.Document.ALL
-                | filters.PHOTO
-                | filters.VIDEO
-                | filters.AUDIO
-                | filters.ANIMATION
-            ),
-            handle_media
+            filters.ALL & ~filters.COMMAND,
+            messages
         )
     )
 
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT
-            & ~filters.COMMAND,
-            handle_text
+    application.add_error_handler(error_handler)
+
+    # --------------------------------------------------------
+    # WEBHOOK - Render
+    # --------------------------------------------------------
+    #
+    # مهم:
+    # هذا الكود لا يستخدم polling / getUpdates.
+    # لذلك يمنع مشكلة:
+    #
+    # telegram.error.Conflict:
+    # terminated by other getUpdates request
+    #
+    # بشرط أن تكون هناك نسخة واحدة فقط من الخدمة على Render.
+    # --------------------------------------------------------
+
+    if not RENDER_URL:
+        raise RuntimeError(
+            "RENDER_EXTERNAL_URL غير موجود. "
+            "هذا الكود مخصص للتشغيل على Render Web Service."
         )
+
+    webhook_url = (
+        f"{RENDER_URL}/{WEBHOOK_SECRET}"
     )
 
-    app.add_error_handler(
-        error_handler
+    logger.info(
+        "Starting webhook: %s",
+        webhook_url
     )
 
-    print("🤖 البوت يعمل الآن...")
-
-    app.run_polling()
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=WEBHOOK_SECRET,
+        webhook_url=webhook_url,
+        secret_token=WEBHOOK_SECRET,
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES,
+    )
 
 
 if __name__ == "__main__":

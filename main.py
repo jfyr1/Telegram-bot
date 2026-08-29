@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 if not BOT_TOKEN:
     raise RuntimeError(
-        "BOT_TOKEN غير موجود. أضفه في Environment Variables في Render."
+        "BOT_TOKEN ØºÙØ± ÙÙØ¬ÙØ¯. Ø£Ø¶ÙÙ ÙÙ Environment Variables ÙÙ Render."
     )
 
 
@@ -90,7 +90,7 @@ def db_init():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             parent_id INTEGER,
             name TEXT NOT NULL,
-            icon TEXT DEFAULT '📁',
+            icon TEXT DEFAULT 'ð',
             sort_order INTEGER DEFAULT 0,
             enabled INTEGER DEFAULT 1,
             created_at TEXT NOT NULL,
@@ -170,7 +170,7 @@ def db_init():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             button_key TEXT UNIQUE NOT NULL,
             label TEXT NOT NULL,
-            icon TEXT DEFAULT '🔘',
+            icon TEXT DEFAULT 'ð',
             sort_order INTEGER DEFAULT 0,
             enabled INTEGER DEFAULT 1,
             admin_only INTEGER DEFAULT 0
@@ -201,12 +201,12 @@ def db_init():
     # --------------------------------------------------------
 
     system_buttons = [
-        ("favorites", "المفضلة", "⭐", 10, 1, 0),
-        ("popular", "الأكثر دخولاً", "📊", 20, 1, 0),
-        ("rating", "تقييم البوت", "⭐", 30, 1, 0),
-        ("about", "حول البوت", "ℹ️", 40, 1, 0),
-        ("contact", "مراسلة الإدارة", "✉️", 50, 1, 0),
-        ("admin", "لوحة الإدارة", "🔐", 100, 1, 1),
+        ("favorites", "Ø§ÙÙÙØ¶ÙØ©", "â­", 10, 1, 0),
+        ("popular", "Ø§ÙØ£ÙØ«Ø± Ø¯Ø®ÙÙØ§Ù", "ð", 20, 1, 0),
+        ("rating", "ØªÙÙÙÙ Ø§ÙØ¨ÙØª", "â­", 30, 1, 0),
+        ("about", "Ø­ÙÙ Ø§ÙØ¨ÙØª", "â¹ï¸", 40, 1, 0),
+        ("contact", "ÙØ±Ø§Ø³ÙØ© Ø§ÙØ¥Ø¯Ø§Ø±Ø©", "âï¸", 50, 1, 0),
+        ("admin", "ÙÙØ­Ø© Ø§ÙØ¥Ø¯Ø§Ø±Ø©", "ð", 100, 1, 1),
     ]
 
     for item in system_buttons:
@@ -233,7 +233,7 @@ def db_init():
             INSERT INTO sections
             (parent_id,name,icon,sort_order,enabled,created_at)
             VALUES (NULL,?,?,?,?,?)
-        """, (0, "المرحلة الأولى", "🎓", 1, now))
+        """, (0, "Ø§ÙÙØ±Ø­ÙØ© Ø§ÙØ£ÙÙÙ", "ð", 1, now))
 
         stage1 = cur.lastrowid
 
@@ -243,8 +243,8 @@ def db_init():
             VALUES (?,?,?,?,?,?)
         """, (
             stage1,
-            "الكورس الأول",
-            "📚",
+            "Ø§ÙÙÙØ±Ø³ Ø§ÙØ£ÙÙ",
+            "ð",
             1,
             1,
             now,
@@ -258,8 +258,8 @@ def db_init():
             VALUES (?,?,?,?,?,?)
         """, (
             stage1,
-            "الكورس الثاني",
-            "📚",
+            "Ø§ÙÙÙØ±Ø³ Ø§ÙØ«Ø§ÙÙ",
+            "ð",
             2,
             1,
             now,
@@ -267,18 +267,18 @@ def db_init():
 
         course2 = cur.lastrowid
 
-        # مواد افتراضية
+        # ÙÙØ§Ø¯ Ø§ÙØªØ±Ø§Ø¶ÙØ©
         subjects1 = [
-            ("رياضيات", "📐"),
-            ("برمجة", "💻"),
-            ("دوائر كهربائية", "⚡"),
-            ("أساسيات الحاسوب", "🖥️"),
+            ("Ø±ÙØ§Ø¶ÙØ§Øª", "ð"),
+            ("Ø¨Ø±ÙØ¬Ø©", "ð»"),
+            ("Ø¯ÙØ§Ø¦Ø± ÙÙØ±Ø¨Ø§Ø¦ÙØ©", "â¡"),
+            ("Ø£Ø³Ø§Ø³ÙØ§Øª Ø§ÙØ­Ø§Ø³ÙØ¨", "ð¥ï¸"),
         ]
 
         subjects2 = [
-            ("الرياضيات", "📐"),
-            ("البرمجة", "💻"),
-            ("الإلكترونيات", "🔌"),
+            ("Ø§ÙØ±ÙØ§Ø¶ÙØ§Øª", "ð"),
+            ("Ø§ÙØ¨Ø±ÙØ¬Ø©", "ð»"),
+            ("Ø§ÙØ¥ÙÙØªØ±ÙÙÙØ§Øª", "ð"),
         ]
 
         for index, (name, icon) in enumerate(subjects1, 1):
@@ -482,26 +482,26 @@ def section_has_contents(section_id):
 def default_icon(name):
     name = name.lower()
 
-    if "رياض" in name:
-        return "📐"
-    if "برمج" in name:
-        return "💻"
-    if "حاسوب" in name:
-        return "🖥️"
-    if "كهرب" in name:
-        return "⚡"
-    if "إلكتر" in name:
-        return "🔌"
-    if "محاض" in name:
-        return "📖"
-    if "كورس" in name:
-        return "📚"
-    if "ملخص" in name:
-        return "📝"
-    if "مرحلة" in name:
-        return "🎓"
+    if "Ø±ÙØ§Ø¶" in name:
+        return "ð"
+    if "Ø¨Ø±ÙØ¬" in name:
+        return "ð»"
+    if "Ø­Ø§Ø³ÙØ¨" in name:
+        return "ð¥ï¸"
+    if "ÙÙØ±Ø¨" in name:
+        return "â¡"
+    if "Ø¥ÙÙØªØ±" in name:
+        return "ð"
+    if "ÙØ­Ø§Ø¶" in name:
+        return "ð"
+    if "ÙÙØ±Ø³" in name:
+        return "ð"
+    if "ÙÙØ®Øµ" in name:
+        return "ð"
+    if "ÙØ±Ø­ÙØ©" in name:
+        return "ð"
 
-    return "📁"
+    return "ð"
 
 
 def get_path(section_id):
@@ -523,7 +523,7 @@ def get_path(section_id):
 
 def path_text(section_id):
     path = get_path(section_id)
-    return "  ›  ".join(path)
+    return "  âº  ".join(path)
 
 
 def record_visit(user_id, section_id):
@@ -653,9 +653,9 @@ def section_keyboard(user_id, section_id):
         ])
 
     favorite_text = (
-        "💛 إزالة من المفضلة"
+        "ð Ø¥Ø²Ø§ÙØ© ÙÙ Ø§ÙÙÙØ¶ÙØ©"
         if is_favorite(user_id, section_id)
-        else "⭐ إضافة إلى المفضلة"
+        else "â­ Ø¥Ø¶Ø§ÙØ© Ø¥ÙÙ Ø§ÙÙÙØ¶ÙØ©"
     )
 
     rows.append([
@@ -668,25 +668,25 @@ def section_keyboard(user_id, section_id):
     if get_setting("notes_enabled", "1") == "1":
         rows.append([
             InlineKeyboardButton(
-                "✉️ ملاحظة بخصوص هذا القسم",
+                "âï¸ ÙÙØ§Ø­Ø¸Ø© Ø¨Ø®ØµÙØµ ÙØ°Ø§ Ø§ÙÙØ³Ù",
                 callback_data=f"NOTE:{section_id}"
             )
         ])
 
     rows.append([
         InlineKeyboardButton(
-            "🏠 القائمة الرئيسية",
+            "ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©",
             callback_data="MAIN"
         ),
         InlineKeyboardButton(
-            "⬅️ الرجوع",
+            "â¬ï¸ Ø§ÙØ±Ø¬ÙØ¹",
             callback_data=f"BACK:{section_id}"
         )
     ])
 
     rows.append([
         InlineKeyboardButton(
-            f"🚪 خروج من {get_section(section_id)['name']}",
+            f"ðª Ø®Ø±ÙØ¬ ÙÙ {get_section(section_id)['name']}",
             callback_data="MAIN"
         )
     ])
@@ -698,37 +698,37 @@ def admin_keyboard():
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
-                "🧩 محرر الأزرار",
+                "ð§© ÙØ­Ø±Ø± Ø§ÙØ£Ø²Ø±Ø§Ø±",
                 callback_data="ADMIN:BUTTONS"
             ),
             InlineKeyboardButton(
-                "📝 تعديل المشاركات",
+                "ð ØªØ¹Ø¯ÙÙ Ø§ÙÙØ´Ø§Ø±ÙØ§Øª",
                 callback_data="ADMIN:CONTENT"
             )
         ],
         [
             InlineKeyboardButton(
-                "📊 الإحصائيات",
+                "ð Ø§ÙØ¥Ø­ØµØ§Ø¦ÙØ§Øª",
                 callback_data="ADMIN:STATS"
             ),
             InlineKeyboardButton(
-                "✉️ المراسلات",
+                "âï¸ Ø§ÙÙØ±Ø§Ø³ÙØ§Øª",
                 callback_data="ADMIN:NOTES"
             )
         ],
         [
             InlineKeyboardButton(
-                "⭐ التقييمات",
+                "â­ Ø§ÙØªÙÙÙÙØ§Øª",
                 callback_data="ADMIN:RATINGS"
             ),
             InlineKeyboardButton(
-                "⚙️ إعدادات البوت",
+                "âï¸ Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª Ø§ÙØ¨ÙØª",
                 callback_data="ADMIN:SETTINGS"
             )
         ],
         [
             InlineKeyboardButton(
-                "🏠 القائمة الرئيسية",
+                "ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©",
                 callback_data="MAIN"
             )
         ]
@@ -743,8 +743,8 @@ async def send_main_menu(update, context, edit=False):
     user = update.effective_user
 
     text = (
-        "🤖 <b>المساعد الذكي</b>\n\n"
-        "📚 <b>اختر القسم الذي تريد الدخول إليه:</b>"
+        "ð¤ <b>Ø§ÙÙØ³Ø§Ø¹Ø¯ Ø§ÙØ°ÙÙ</b>\n\n"
+        "ð <b>Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙØ°Ù ØªØ±ÙØ¯ Ø§ÙØ¯Ø®ÙÙ Ø¥ÙÙÙ:</b>"
     )
 
     if edit and update.callback_query:
@@ -767,7 +767,7 @@ async def show_section(update, context, section_id, edit=True):
 
     if not section:
         await update.effective_message.reply_text(
-            bold("القسم غير موجود."),
+            bold("Ø§ÙÙØ³Ù ØºÙØ± ÙÙØ¬ÙØ¯."),
             parse_mode=ParseMode.HTML
         )
         return
@@ -781,15 +781,15 @@ async def show_section(update, context, section_id, edit=True):
 
     text = (
         f"<b>{html.escape(title)}</b>\n\n"
-        f"<b>المسار:</b> {html.escape(path_text(section_id))}\n\n"
+        f"<b>Ø§ÙÙØ³Ø§Ø±:</b> {html.escape(path_text(section_id))}\n\n"
     )
 
     if children:
-        text += "<b>اختر من الأقسام التالية:</b>"
+        text += "<b>Ø§Ø®ØªØ± ÙÙ Ø§ÙØ£ÙØ³Ø§Ù Ø§ÙØªØ§ÙÙØ©:</b>"
     elif contents:
-        text += "<b>المحتوى المتوفر لهذا القسم سيظهر أسفل هذه الواجهة.</b>"
+        text += "<b>Ø§ÙÙØ­ØªÙÙ Ø§ÙÙØªÙÙØ± ÙÙØ°Ø§ Ø§ÙÙØ³Ù Ø³ÙØ¸ÙØ± Ø£Ø³ÙÙ ÙØ°Ù Ø§ÙÙØ§Ø¬ÙØ©.</b>"
     else:
-        text += "<b>لا يوجد محتوى داخل هذا القسم حالياً.</b>"
+        text += "<b>ÙØ§ ÙÙØ¬Ø¯ ÙØ­ØªÙÙ Ø¯Ø§Ø®Ù ÙØ°Ø§ Ø§ÙÙØ³Ù Ø­Ø§ÙÙØ§Ù.</b>"
 
     keyboard = section_keyboard(user.id, section_id)
 
@@ -806,7 +806,7 @@ async def show_section(update, context, section_id, edit=True):
             reply_markup=keyboard
         )
 
-    # إرسال المحتوى المخزن
+    # Ø¥Ø±Ø³Ø§Ù Ø§ÙÙØ­ØªÙÙ Ø§ÙÙØ®Ø²Ù
     if contents:
         for item in contents:
             try:
@@ -836,16 +836,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             username = (
                 f"@{user.username}"
                 if user.username
-                else "بدون معرف"
+                else "Ø¨Ø¯ÙÙ ÙØ¹Ø±Ù"
             )
 
             await context.bot.send_message(
                 ADMIN_ID,
                 (
-                    "🆕 <b>مستخدم جديد دخل البوت</b>\n\n"
-                    f"👤 الاسم: <b>{html.escape(user.full_name)}</b>\n"
-                    f"🔹 المعرف: <b>{html.escape(username)}</b>\n"
-                    f"🆔 ID: <code>{user.id}</code>"
+                    "ð <b>ÙØ³ØªØ®Ø¯Ù Ø¬Ø¯ÙØ¯ Ø¯Ø®Ù Ø§ÙØ¨ÙØª</b>\n\n"
+                    f"ð¤ Ø§ÙØ§Ø³Ù: <b>{html.escape(user.full_name)}</b>\n"
+                    f"ð¹ Ø§ÙÙØ¹Ø±Ù: <b>{html.escape(username)}</b>\n"
+                    f"ð ID: <code>{user.id}</code>"
                 ),
                 parse_mode=ParseMode.HTML
             )
@@ -854,11 +854,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if get_setting("welcome_enabled", "1") == "1":
         text = (
-            "👋 <b>أهلاً وسهلاً بك في المساعد الذكي</b>\n\n"
-            "📚 <b>اختر القسم الذي تريد الدخول إليه.</b>"
+            "ð <b>Ø£ÙÙØ§Ù ÙØ³ÙÙØ§Ù Ø¨Ù ÙÙ Ø§ÙÙØ³Ø§Ø¹Ø¯ Ø§ÙØ°ÙÙ</b>\n\n"
+            "ð <b>Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙØ°Ù ØªØ±ÙØ¯ Ø§ÙØ¯Ø®ÙÙ Ø¥ÙÙÙ.</b>"
         )
     else:
-        text = "<b>القائمة الرئيسية</b>"
+        text = "<b>Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©</b>"
 
     await update.message.reply_text(
         text,
@@ -891,14 +891,14 @@ async def system_button(update, context, key):
         context.user_data["state"] = "global_note"
 
         await query.edit_message_text(
-            "<b>✉️ مراسلة الإدارة</b>\n\n"
-            "<b>أرسل رسالتك الآن، وستصل إلى الإدارة مباشرة.</b>\n\n"
-            "<b>للإلغاء:</b> /cancel",
+            "<b>âï¸ ÙØ±Ø§Ø³ÙØ© Ø§ÙØ¥Ø¯Ø§Ø±Ø©</b>\n\n"
+            "<b>Ø£Ø±Ø³Ù Ø±Ø³Ø§ÙØªÙ Ø§ÙØ¢ÙØ ÙØ³ØªØµÙ Ø¥ÙÙ Ø§ÙØ¥Ø¯Ø§Ø±Ø© ÙØ¨Ø§Ø´Ø±Ø©.</b>\n\n"
+            "<b>ÙÙØ¥ÙØºØ§Ø¡:</b> /cancel",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton(
-                        "❌ إلغاء",
+                        "â Ø¥ÙØºØ§Ø¡",
                         callback_data="CANCEL"
                     )
                 ]
@@ -908,7 +908,7 @@ async def system_button(update, context, key):
     elif key == "admin":
         if not is_admin(user.id):
             await query.answer(
-                "غير مسموح لك بالدخول.",
+                "ØºÙØ± ÙØ³ÙÙØ­ ÙÙ Ø¨Ø§ÙØ¯Ø®ÙÙ.",
                 show_alert=True
             )
             return
@@ -943,17 +943,17 @@ async def show_favorites(update, context):
 
     buttons.append([
         InlineKeyboardButton(
-            "🏠 القائمة الرئيسية",
+            "ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©",
             callback_data="MAIN"
         )
     ])
 
     await update.callback_query.edit_message_text(
-        "<b>⭐ المفضلة</b>\n\n"
+        "<b>â­ Ø§ÙÙÙØ¶ÙØ©</b>\n\n"
         + (
-            "<b>الأقسام المحفوظة:</b>"
+            "<b>Ø§ÙØ£ÙØ³Ø§Ù Ø§ÙÙØ­ÙÙØ¸Ø©:</b>"
             if rows
-            else "<b>لا توجد أقسام في المفضلة حالياً.</b>"
+            else "<b>ÙØ§ ØªÙØ¬Ø¯ Ø£ÙØ³Ø§Ù ÙÙ Ø§ÙÙÙØ¶ÙØ© Ø­Ø§ÙÙØ§Ù.</b>"
         ),
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(buttons)
@@ -983,21 +983,21 @@ async def show_popular(update, context):
     for row in rows:
         buttons.append([
             InlineKeyboardButton(
-                f"{row['icon']} {row['name']} — {row['total']} زيارة",
+                f"{row['icon']} {row['name']} â {row['total']} Ø²ÙØ§Ø±Ø©",
                 callback_data=f"OPEN:{row['id']}"
             )
         ])
 
     buttons.append([
         InlineKeyboardButton(
-            "🏠 القائمة الرئيسية",
+            "ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©",
             callback_data="MAIN"
         )
     ])
 
     await update.callback_query.edit_message_text(
-        "<b>📊 الأكثر دخولاً</b>\n\n"
-        "<b>أكثر الأقسام زيارة:</b>",
+        "<b>ð Ø§ÙØ£ÙØ«Ø± Ø¯Ø®ÙÙØ§Ù</b>\n\n"
+        "<b>Ø£ÙØ«Ø± Ø§ÙØ£ÙØ³Ø§Ù Ø²ÙØ§Ø±Ø©:</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(buttons)
     )
@@ -1005,22 +1005,22 @@ async def show_popular(update, context):
 
 async def show_rating(update, context):
     await update.callback_query.edit_message_text(
-        "<b>⭐ تقييم البوت</b>\n\n"
-        "<b>اختر تقييمك:</b>",
+        "<b>â­ ØªÙÙÙÙ Ø§ÙØ¨ÙØª</b>\n\n"
+        "<b>Ø§Ø®ØªØ± ØªÙÙÙÙÙ:</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("⭐", callback_data="RATE:1"),
-                InlineKeyboardButton("⭐⭐", callback_data="RATE:2"),
-                InlineKeyboardButton("⭐⭐⭐", callback_data="RATE:3"),
+                InlineKeyboardButton("â­", callback_data="RATE:1"),
+                InlineKeyboardButton("â­â­", callback_data="RATE:2"),
+                InlineKeyboardButton("â­â­â­", callback_data="RATE:3"),
             ],
             [
-                InlineKeyboardButton("⭐⭐⭐⭐", callback_data="RATE:4"),
-                InlineKeyboardButton("⭐⭐⭐⭐⭐", callback_data="RATE:5"),
+                InlineKeyboardButton("â­â­â­â­", callback_data="RATE:4"),
+                InlineKeyboardButton("â­â­â­â­â­", callback_data="RATE:5"),
             ],
             [
                 InlineKeyboardButton(
-                    "🏠 القائمة الرئيسية",
+                    "ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©",
                     callback_data="MAIN"
                 )
             ]
@@ -1030,28 +1030,28 @@ async def show_rating(update, context):
 
 async def show_about(update, context):
     text = (
-        "<b>ℹ️ حول البوت</b>\n\n"
-        "<b>📚 فهرس الاستخدام:</b>\n\n"
-        "1️⃣ <b>القائمة الرئيسية</b>\n"
-        "منها تدخل إلى جميع الأقسام الرئيسية.\n\n"
-        "2️⃣ <b>الأقسام الفرعية</b>\n"
-        "كل قسم يمكن أن يحتوي على أقسام أخرى حتى أي مستوى.\n\n"
-        "3️⃣ <b>المحتوى</b>\n"
-        "المحاضرات يمكن أن تحتوي PDF أو صورة أو فيديو "
-        "أو ملف أو صوت أو أي محتوى يسمح به Telegram.\n\n"
-        "4️⃣ <b>المفضلة</b>\n"
-        "احفظ الأقسام التي تدخل إليها كثيراً.\n\n"
-        "5️⃣ <b>الأكثر دخولاً</b>\n"
-        "يعرض الأقسام الأكثر زيارة.\n\n"
-        "6️⃣ <b>مراسلة الإدارة</b>\n"
-        "يمكن إرسال ملاحظة أو مشكلة إلى الإدارة.\n\n"
-        "7️⃣ <b>تقييم البوت</b>\n"
-        "يمكنك تقييم البوت من نجمة إلى خمس نجوم.\n\n"
-        "8️⃣ <b>لوحة الإدارة</b>\n"
-        "الإدارة تستطيع إنشاء وتعديل ونقل ودمج وحذف الأقسام، "
-        "وتعديل الأزرار والمحتوى.\n\n"
-        "<b>🎯 الهدف:</b>\n"
-        "تنظيم المحاضرات والملفات بطريقة سهلة وسريعة."
+        "<b>â¹ï¸ Ø­ÙÙ Ø§ÙØ¨ÙØª</b>\n\n"
+        "<b>ð ÙÙØ±Ø³ Ø§ÙØ§Ø³ØªØ®Ø¯Ø§Ù:</b>\n\n"
+        "1ï¸â£ <b>Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©</b>\n"
+        "ÙÙÙØ§ ØªØ¯Ø®Ù Ø¥ÙÙ Ø¬ÙÙØ¹ Ø§ÙØ£ÙØ³Ø§Ù Ø§ÙØ±Ø¦ÙØ³ÙØ©.\n\n"
+        "2ï¸â£ <b>Ø§ÙØ£ÙØ³Ø§Ù Ø§ÙÙØ±Ø¹ÙØ©</b>\n"
+        "ÙÙ ÙØ³Ù ÙÙÙÙ Ø£Ù ÙØ­ØªÙÙ Ø¹ÙÙ Ø£ÙØ³Ø§Ù Ø£Ø®Ø±Ù Ø­ØªÙ Ø£Ù ÙØ³ØªÙÙ.\n\n"
+        "3ï¸â£ <b>Ø§ÙÙØ­ØªÙÙ</b>\n"
+        "Ø§ÙÙØ­Ø§Ø¶Ø±Ø§Øª ÙÙÙÙ Ø£Ù ØªØ­ØªÙÙ PDF Ø£Ù ØµÙØ±Ø© Ø£Ù ÙÙØ¯ÙÙ "
+        "Ø£Ù ÙÙÙ Ø£Ù ØµÙØª Ø£Ù Ø£Ù ÙØ­ØªÙÙ ÙØ³ÙØ­ Ø¨Ù Telegram.\n\n"
+        "4ï¸â£ <b>Ø§ÙÙÙØ¶ÙØ©</b>\n"
+        "Ø§Ø­ÙØ¸ Ø§ÙØ£ÙØ³Ø§Ù Ø§ÙØªÙ ØªØ¯Ø®Ù Ø¥ÙÙÙØ§ ÙØ«ÙØ±Ø§Ù.\n\n"
+        "5ï¸â£ <b>Ø§ÙØ£ÙØ«Ø± Ø¯Ø®ÙÙØ§Ù</b>\n"
+        "ÙØ¹Ø±Ø¶ Ø§ÙØ£ÙØ³Ø§Ù Ø§ÙØ£ÙØ«Ø± Ø²ÙØ§Ø±Ø©.\n\n"
+        "6ï¸â£ <b>ÙØ±Ø§Ø³ÙØ© Ø§ÙØ¥Ø¯Ø§Ø±Ø©</b>\n"
+        "ÙÙÙÙ Ø¥Ø±Ø³Ø§Ù ÙÙØ§Ø­Ø¸Ø© Ø£Ù ÙØ´ÙÙØ© Ø¥ÙÙ Ø§ÙØ¥Ø¯Ø§Ø±Ø©.\n\n"
+        "7ï¸â£ <b>ØªÙÙÙÙ Ø§ÙØ¨ÙØª</b>\n"
+        "ÙÙÙÙÙ ØªÙÙÙÙ Ø§ÙØ¨ÙØª ÙÙ ÙØ¬ÙØ© Ø¥ÙÙ Ø®ÙØ³ ÙØ¬ÙÙ.\n\n"
+        "8ï¸â£ <b>ÙÙØ­Ø© Ø§ÙØ¥Ø¯Ø§Ø±Ø©</b>\n"
+        "Ø§ÙØ¥Ø¯Ø§Ø±Ø© ØªØ³ØªØ·ÙØ¹ Ø¥ÙØ´Ø§Ø¡ ÙØªØ¹Ø¯ÙÙ ÙÙÙÙ ÙØ¯ÙØ¬ ÙØ­Ø°Ù Ø§ÙØ£ÙØ³Ø§ÙØ "
+        "ÙØªØ¹Ø¯ÙÙ Ø§ÙØ£Ø²Ø±Ø§Ø± ÙØ§ÙÙØ­ØªÙÙ.\n\n"
+        "<b>ð¯ Ø§ÙÙØ¯Ù:</b>\n"
+        "ØªÙØ¸ÙÙ Ø§ÙÙØ­Ø§Ø¶Ø±Ø§Øª ÙØ§ÙÙÙÙØ§Øª Ø¨Ø·Ø±ÙÙØ© Ø³ÙÙØ© ÙØ³Ø±ÙØ¹Ø©."
     )
 
     await update.callback_query.edit_message_text(
@@ -1060,7 +1060,7 @@ async def show_about(update, context):
         reply_markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(
-                    "🏠 القائمة الرئيسية",
+                    "ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©",
                     callback_data="MAIN"
                 )
             ]
@@ -1092,18 +1092,18 @@ async def save_rating(update, context, rating):
     conn.close()
 
     await update.callback_query.answer(
-        "تم حفظ تقييمك ❤️",
+        "ØªÙ Ø­ÙØ¸ ØªÙÙÙÙÙ â¤ï¸",
         show_alert=True
     )
 
     await update.callback_query.edit_message_text(
-        f"<b>شكراً لك ❤️</b>\n\n"
-        f"<b>تقييمك:</b> {'⭐' * rating}",
+        f"<b>Ø´ÙØ±Ø§Ù ÙÙ â¤ï¸</b>\n\n"
+        f"<b>ØªÙÙÙÙÙ:</b> {'â­' * rating}",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(
-                    "🏠 القائمة الرئيسية",
+                    "ð  Ø§ÙÙØ§Ø¦ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©",
                     callback_data="MAIN"
                 )
             ]
@@ -1122,15 +1122,15 @@ async def start_note(update, context, section_id):
     section = get_section(section_id)
 
     await update.callback_query.edit_message_text(
-        f"<b>✉️ ملاحظة عن قسم: "
+        f"<b>âï¸ ÙÙØ§Ø­Ø¸Ø© Ø¹Ù ÙØ³Ù: "
         f"{html.escape(section['name'])}</b>\n\n"
-        "<b>أرسل الملاحظة الآن.</b>\n\n"
-        "<b>للإلغاء:</b> /cancel",
+        "<b>Ø£Ø±Ø³Ù Ø§ÙÙÙØ§Ø­Ø¸Ø© Ø§ÙØ¢Ù.</b>\n\n"
+        "<b>ÙÙØ¥ÙØºØ§Ø¡:</b> /cancel",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(
-                    "❌ إلغاء",
+                    "â Ø¥ÙØºØ§Ø¡",
                     callback_data="CANCEL"
                 )
             ]
@@ -1167,12 +1167,12 @@ async def save_note(update, context, section_id, text):
         await context.bot.send_message(
             ADMIN_ID,
             (
-                "✉️ <b>ملاحظة جديدة</b>\n\n"
-                f"🆔 رقم: <code>{note_id}</code>\n"
-                f"👤 المستخدم: <b>{html.escape(user.full_name)}</b>\n"
-                f"🆔 ID: <code>{user.id}</code>\n"
-                f"📂 القسم: <b>{html.escape(section['name'])}</b>\n\n"
-                f"📝 <b>الملاحظة:</b>\n"
+                "âï¸ <b>ÙÙØ§Ø­Ø¸Ø© Ø¬Ø¯ÙØ¯Ø©</b>\n\n"
+                f"ð Ø±ÙÙ: <code>{note_id}</code>\n"
+                f"ð¤ Ø§ÙÙØ³ØªØ®Ø¯Ù: <b>{html.escape(user.full_name)}</b>\n"
+                f"ð ID: <code>{user.id}</code>\n"
+                f"ð Ø§ÙÙØ³Ù: <b>{html.escape(section['name'])}</b>\n\n"
+                f"ð <b>Ø§ÙÙÙØ§Ø­Ø¸Ø©:</b>\n"
                 f"{html.escape(text)}"
             ),
             parse_mode=ParseMode.HTML
@@ -1183,7 +1183,7 @@ async def save_note(update, context, section_id, text):
     context.user_data.clear()
 
     await update.message.reply_text(
-        "<b>✅ تم إرسال ملاحظتك إلى الإدارة.</b>",
+        "<b>â ØªÙ Ø¥Ø±Ø³Ø§Ù ÙÙØ§Ø­Ø¸ØªÙ Ø¥ÙÙ Ø§ÙØ¥Ø¯Ø§Ø±Ø©.</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=main_keyboard(user.id)
     )
@@ -1195,8 +1195,8 @@ async def save_note(update, context, section_id, text):
 
 async def show_admin(update, context):
     text = (
-        "🔐 <b>لوحة الإدارة</b>\n\n"
-        "<b>اختر العملية المطلوبة:</b>"
+        "ð <b>ÙÙØ­Ø© Ø§ÙØ¥Ø¯Ø§Ø±Ø©</b>\n\n"
+        "<b>Ø§Ø®ØªØ± Ø§ÙØ¹ÙÙÙØ© Ø§ÙÙØ·ÙÙØ¨Ø©:</b>"
     )
 
     if update.callback_query:
@@ -1219,40 +1219,40 @@ async def show_admin(update, context):
 
 async def editor_home(update, context):
     await update.callback_query.edit_message_text(
-        "<b>🧩 محرر الأزرار</b>\n\n"
-        "<b>هنا تستطيع التحكم بكل الأقسام والأزرار.</b>\n\n"
-        "يمكنك:\n"
-        "➕ إضافة قسم\n"
-        "✏️ تعديل الاسم\n"
-        "🎨 تعديل الأيقونة\n"
-        "↕️ تغيير الترتيب\n"
-        "📦 نقل القسم\n"
-        "🔗 دمج الأقسام\n"
-        "🗑 حذف القسم\n"
-        "👁 إخفاء/إظهار القسم",
+        "<b>ð§© ÙØ­Ø±Ø± Ø§ÙØ£Ø²Ø±Ø§Ø±</b>\n\n"
+        "<b>ÙÙØ§ ØªØ³ØªØ·ÙØ¹ Ø§ÙØªØ­ÙÙ Ø¨ÙÙ Ø§ÙØ£ÙØ³Ø§Ù ÙØ§ÙØ£Ø²Ø±Ø§Ø±.</b>\n\n"
+        "ÙÙÙÙÙ:\n"
+        "â Ø¥Ø¶Ø§ÙØ© ÙØ³Ù\n"
+        "âï¸ ØªØ¹Ø¯ÙÙ Ø§ÙØ§Ø³Ù\n"
+        "ð¨ ØªØ¹Ø¯ÙÙ Ø§ÙØ£ÙÙÙÙØ©\n"
+        "âï¸ ØªØºÙÙØ± Ø§ÙØªØ±ØªÙØ¨\n"
+        "ð¦ ÙÙÙ Ø§ÙÙØ³Ù\n"
+        "ð Ø¯ÙØ¬ Ø§ÙØ£ÙØ³Ø§Ù\n"
+        "ð Ø­Ø°Ù Ø§ÙÙØ³Ù\n"
+        "ð Ø¥Ø®ÙØ§Ø¡/Ø¥Ø¸ÙØ§Ø± Ø§ÙÙØ³Ù",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(
-                    "🏠 تعديل الواجهة الرئيسية",
+                    "ð  ØªØ¹Ø¯ÙÙ Ø§ÙÙØ§Ø¬ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©",
                     callback_data="ED:ROOT"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "➕ إضافة قسم رئيسي",
+                    "â Ø¥Ø¶Ø§ÙØ© ÙØ³Ù Ø±Ø¦ÙØ³Ù",
                     callback_data="ADD:ROOT"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "⚙️ أزرار النظام",
+                    "âï¸ Ø£Ø²Ø±Ø§Ø± Ø§ÙÙØ¸Ø§Ù",
                     callback_data="ED:SYSTEM"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "⬅️ لوحة الإدارة",
+                    "â¬ï¸ ÙÙØ­Ø© Ø§ÙØ¥Ø¯Ø§Ø±Ø©",
                     callback_data="ADMIN:HOME"
                 )
             ]
@@ -1265,7 +1265,7 @@ async def edit_section_screen(update, context, section_id):
 
     if not section:
         await update.callback_query.answer(
-            "القسم غير موجود.",
+            "Ø§ÙÙØ³Ù ØºÙØ± ÙÙØ¬ÙØ¯.",
             show_alert=True
         )
         return
@@ -1285,67 +1285,67 @@ async def edit_section_screen(update, context, section_id):
     buttons.extend([
         [
             InlineKeyboardButton(
-                "➕ إضافة قسم داخل هذا القسم",
+                "â Ø¥Ø¶Ø§ÙØ© ÙØ³Ù Ø¯Ø§Ø®Ù ÙØ°Ø§ Ø§ÙÙØ³Ù",
                 callback_data=f"ADD:{section_id}"
             )
         ],
         [
             InlineKeyboardButton(
-                "✏️ تعديل اسم القسم",
+                "âï¸ ØªØ¹Ø¯ÙÙ Ø§Ø³Ù Ø§ÙÙØ³Ù",
                 callback_data=f"RENAME:{section_id}"
             ),
             InlineKeyboardButton(
-                "🎨 تعديل الأيقونة",
+                "ð¨ ØªØ¹Ø¯ÙÙ Ø§ÙØ£ÙÙÙÙØ©",
                 callback_data=f"ICON:{section_id}"
             )
         ],
         [
             InlineKeyboardButton(
-                "📦 نقل القسم",
+                "ð¦ ÙÙÙ Ø§ÙÙØ³Ù",
                 callback_data=f"MOVE:{section_id}"
             ),
             InlineKeyboardButton(
-                "🔗 دمج القسم",
+                "ð Ø¯ÙØ¬ Ø§ÙÙØ³Ù",
                 callback_data=f"MERGE:{section_id}"
             )
         ],
         [
             InlineKeyboardButton(
-                "⬆️ رفع",
+                "â¬ï¸ Ø±ÙØ¹",
                 callback_data=f"UP:{section_id}"
             ),
             InlineKeyboardButton(
-                "⬇️ تنزيل",
+                "â¬ï¸ ØªÙØ²ÙÙ",
                 callback_data=f"DOWN:{section_id}"
             )
         ],
         [
             InlineKeyboardButton(
-                "👁 إظهار/إخفاء",
+                "ð Ø¥Ø¸ÙØ§Ø±/Ø¥Ø®ÙØ§Ø¡",
                 callback_data=f"TOGGLE:{section_id}"
             )
         ],
         [
             InlineKeyboardButton(
-                "🗑 حذف القسم",
+                "ð Ø­Ø°Ù Ø§ÙÙØ³Ù",
                 callback_data=f"DELETE:{section_id}"
             )
         ],
         [
             InlineKeyboardButton(
-                "⬅️ محرر الأزرار",
+                "â¬ï¸ ÙØ­Ø±Ø± Ø§ÙØ£Ø²Ø±Ø§Ø±",
                 callback_data="ADMIN:BUTTONS"
             )
         ]
     ])
 
     await update.callback_query.edit_message_text(
-        f"<b>🧩 تحرير:</b> "
+        f"<b>ð§© ØªØ­Ø±ÙØ±:</b> "
         f"{html.escape(section['icon'])} "
         f"{html.escape(section['name'])}\n\n"
-        f"<b>المسار:</b> "
+        f"<b>Ø§ÙÙØ³Ø§Ø±:</b> "
         f"{html.escape(path_text(section_id))}\n\n"
-        "<b>الأقسام الموجودة داخل هذا القسم:</b>",
+        "<b>Ø§ÙØ£ÙØ³Ø§Ù Ø§ÙÙÙØ¬ÙØ¯Ø© Ø¯Ø§Ø®Ù ÙØ°Ø§ Ø§ÙÙØ³Ù:</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(buttons)
     )
@@ -1366,28 +1366,28 @@ async def edit_root_screen(update, context):
 
     buttons.append([
         InlineKeyboardButton(
-            "➕ إضافة قسم رئيسي",
+            "â Ø¥Ø¶Ø§ÙØ© ÙØ³Ù Ø±Ø¦ÙØ³Ù",
             callback_data="ADD:ROOT"
         )
     ])
 
     buttons.append([
         InlineKeyboardButton(
-            "⚙️ أزرار النظام",
+            "âï¸ Ø£Ø²Ø±Ø§Ø± Ø§ÙÙØ¸Ø§Ù",
             callback_data="ED:SYSTEM"
         )
     ])
 
     buttons.append([
         InlineKeyboardButton(
-            "⬅️ محرر الأزرار",
+            "â¬ï¸ ÙØ­Ø±Ø± Ø§ÙØ£Ø²Ø±Ø§Ø±",
             callback_data="ADMIN:BUTTONS"
         )
     ])
 
     await update.callback_query.edit_message_text(
-        "<b>🏠 تحرير الواجهة الرئيسية</b>\n\n"
-        "<b>اختر القسم الذي تريد تعديله:</b>",
+        "<b>ð  ØªØ­Ø±ÙØ± Ø§ÙÙØ§Ø¬ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©</b>\n\n"
+        "<b>Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙØ°Ù ØªØ±ÙØ¯ ØªØ¹Ø¯ÙÙÙ:</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(buttons)
     )
@@ -1402,18 +1402,18 @@ async def ask_add_section(update, context, parent_id):
     context.user_data["parent_id"] = parent_id
 
     if parent_id == "ROOT":
-        location = "الواجهة الرئيسية"
+        location = "Ø§ÙÙØ§Ø¬ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©"
     else:
         parent = get_section(parent_id)
-        location = parent["name"] if parent else "القسم"
+        location = parent["name"] if parent else "Ø§ÙÙØ³Ù"
 
     await update.callback_query.edit_message_text(
-        f"<b>➕ إضافة قسم جديد داخل: "
+        f"<b>â Ø¥Ø¶Ø§ÙØ© ÙØ³Ù Ø¬Ø¯ÙØ¯ Ø¯Ø§Ø®Ù: "
         f"{html.escape(location)}</b>\n\n"
-        "<b>أرسل اسم القسم الآن.</b>\n\n"
-        "<b>مثال:</b>\n"
-        "<b>المحاضرة الأولى</b>\n\n"
-        "<b>للإلغاء:</b> /cancel",
+        "<b>Ø£Ø±Ø³Ù Ø§Ø³Ù Ø§ÙÙØ³Ù Ø§ÙØ¢Ù.</b>\n\n"
+        "<b>ÙØ«Ø§Ù:</b>\n"
+        "<b>Ø§ÙÙØ­Ø§Ø¶Ø±Ø© Ø§ÙØ£ÙÙÙ</b>\n\n"
+        "<b>ÙÙØ¥ÙØºØ§Ø¡:</b> /cancel",
         parse_mode=ParseMode.HTML
     )
 
@@ -1466,9 +1466,9 @@ async def ask_rename(update, context, section_id):
     section = get_section(section_id)
 
     await update.callback_query.edit_message_text(
-        f"<b>✏️ تعديل اسم القسم الحالي:</b>\n"
+        f"<b>âï¸ ØªØ¹Ø¯ÙÙ Ø§Ø³Ù Ø§ÙÙØ³Ù Ø§ÙØ­Ø§ÙÙ:</b>\n"
         f"<b>{html.escape(section['name'])}</b>\n\n"
-        "<b>أرسل الاسم الجديد:</b>",
+        "<b>Ø£Ø±Ø³Ù Ø§ÙØ§Ø³Ù Ø§ÙØ¬Ø¯ÙØ¯:</b>",
         parse_mode=ParseMode.HTML
     )
 
@@ -1480,10 +1480,10 @@ async def ask_icon(update, context, section_id):
     section = get_section(section_id)
 
     await update.callback_query.edit_message_text(
-        f"<b>🎨 تعديل أيقونة:</b>\n\n"
+        f"<b>ð¨ ØªØ¹Ø¯ÙÙ Ø£ÙÙÙÙØ©:</b>\n\n"
         f"<b>{html.escape(section['name'])}</b>\n"
-        f"<b>الأيقونة الحالية:</b> {section['icon']}\n\n"
-        "<b>أرسل الإيموجي الجديد:</b>",
+        f"<b>Ø§ÙØ£ÙÙÙÙØ© Ø§ÙØ­Ø§ÙÙØ©:</b> {section['icon']}\n\n"
+        "<b>Ø£Ø±Ø³Ù Ø§ÙØ¥ÙÙÙØ¬Ù Ø§ÙØ¬Ø¯ÙØ¯:</b>",
         parse_mode=ParseMode.HTML
     )
 
@@ -1512,21 +1512,21 @@ async def confirm_delete(update, context, section_id):
     contents = len(get_contents(section_id))
 
     await update.callback_query.edit_message_text(
-        "<b>⚠️ تأكيد الحذف</b>\n\n"
-        f"القسم: <b>{html.escape(section['name'])}</b>\n"
-        f"الأقسام داخله: <b>{children}</b>\n"
-        f"المشاركات: <b>{contents}</b>\n\n"
-        "<b>الحذف سيحذف القسم ومحتوياته.</b>\n"
-        "<b>هل أنت متأكد؟</b>",
+        "<b>â ï¸ ØªØ£ÙÙØ¯ Ø§ÙØ­Ø°Ù</b>\n\n"
+        f"Ø§ÙÙØ³Ù: <b>{html.escape(section['name'])}</b>\n"
+        f"Ø§ÙØ£ÙØ³Ø§Ù Ø¯Ø§Ø®ÙÙ: <b>{children}</b>\n"
+        f"Ø§ÙÙØ´Ø§Ø±ÙØ§Øª: <b>{contents}</b>\n\n"
+        "<b>Ø§ÙØ­Ø°Ù Ø³ÙØ­Ø°Ù Ø§ÙÙØ³Ù ÙÙØ­ØªÙÙØ§ØªÙ.</b>\n"
+        "<b>ÙÙ Ø£ÙØª ÙØªØ£ÙØ¯Ø</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(
-                    "✅ نعم، حذف",
+                    "â ÙØ¹ÙØ Ø­Ø°Ù",
                     callback_data=f"DELETE_YES:{section_id}"
                 ),
                 InlineKeyboardButton(
-                    "❌ إلغاء",
+                    "â Ø¥ÙØºØ§Ø¡",
                     callback_data=f"EDSEC:{section_id}"
                 )
             ]
@@ -1582,7 +1582,7 @@ async def move_screen(update, context, section_id):
     buttons = [
         [
             InlineKeyboardButton(
-                "🏠 الواجهة الرئيسية",
+                "ð  Ø§ÙÙØ§Ø¬ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©",
                 callback_data=f"MOVE_TO:{section_id}:ROOT"
             )
         ]
@@ -1601,15 +1601,15 @@ async def move_screen(update, context, section_id):
 
     buttons.append([
         InlineKeyboardButton(
-            "❌ إلغاء",
+            "â Ø¥ÙØºØ§Ø¡",
             callback_data=f"EDSEC:{section_id}"
         )
     ])
 
     await update.callback_query.edit_message_text(
-        f"<b>📦 نقل القسم:</b>\n"
+        f"<b>ð¦ ÙÙÙ Ø§ÙÙØ³Ù:</b>\n"
         f"<b>{html.escape(section['name'])}</b>\n\n"
-        "<b>اختر القسم الجديد الذي سيكون بداخله:</b>",
+        "<b>Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙØ¬Ø¯ÙØ¯ Ø§ÙØ°Ù Ø³ÙÙÙÙ Ø¨Ø¯Ø§Ø®ÙÙ:</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(buttons)
     )
@@ -1619,25 +1619,25 @@ async def confirm_move(update, context, source_id, target_id):
     source = get_section(source_id)
 
     if target_id == "ROOT":
-        target_name = "الواجهة الرئيسية"
+        target_name = "Ø§ÙÙØ§Ø¬ÙØ© Ø§ÙØ±Ø¦ÙØ³ÙØ©"
     else:
         target = get_section(int(target_id))
         target_name = target["name"]
 
     await update.callback_query.edit_message_text(
-        "<b>⚠️ تأكيد النقل</b>\n\n"
-        f"<b>القسم:</b> {html.escape(source['name'])}\n"
-        f"<b>إلى:</b> {html.escape(target_name)}\n\n"
-        "<b>هل تريد تنفيذ النقل؟</b>",
+        "<b>â ï¸ ØªØ£ÙÙØ¯ Ø§ÙÙÙÙ</b>\n\n"
+        f"<b>Ø§ÙÙØ³Ù:</b> {html.escape(source['name'])}\n"
+        f"<b>Ø¥ÙÙ:</b> {html.escape(target_name)}\n\n"
+        "<b>ÙÙ ØªØ±ÙØ¯ ØªÙÙÙØ° Ø§ÙÙÙÙØ</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(
-                    "✅ تأكيد النقل",
+                    "â ØªØ£ÙÙØ¯ Ø§ÙÙÙÙ",
                     callback_data=f"MOVE_YES:{source_id}:{target_id}"
                 ),
                 InlineKeyboardButton(
-                    "❌ إلغاء",
+                    "â Ø¥ÙØºØ§Ø¡",
                     callback_data=f"EDSEC:{source_id}"
                 )
             ]
@@ -1708,16 +1708,16 @@ async def merge_screen(update, context, source_id):
 
     buttons.append([
         InlineKeyboardButton(
-            "❌ إلغاء",
+            "â Ø¥ÙØºØ§Ø¡",
             callback_data=f"EDSEC:{source_id}"
         )
     ])
 
     await update.callback_query.edit_message_text(
-        f"<b>🔗 دمج القسم:</b>\n"
+        f"<b>ð Ø¯ÙØ¬ Ø§ÙÙØ³Ù:</b>\n"
         f"<b>{html.escape(source['name'])}</b>\n\n"
-        "<b>اختر القسم الذي سيتم الدمج بداخله:</b>\n\n"
-        "<b>سيتم نقل الأقسام والمشاركات ثم حذف القسم الأصلي.</b>",
+        "<b>Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙØ°Ù Ø³ÙØªÙ Ø§ÙØ¯ÙØ¬ Ø¨Ø¯Ø§Ø®ÙÙ:</b>\n\n"
+        "<b>Ø³ÙØªÙ ÙÙÙ Ø§ÙØ£ÙØ³Ø§Ù ÙØ§ÙÙØ´Ø§Ø±ÙØ§Øª Ø«Ù Ø­Ø°Ù Ø§ÙÙØ³Ù Ø§ÙØ£ØµÙÙ.</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(buttons)
     )
@@ -1728,21 +1728,21 @@ async def confirm_merge(update, context, source_id, target_id):
     target = get_section(target_id)
 
     await update.callback_query.edit_message_text(
-        "<b>⚠️ تأكيد الدمج</b>\n\n"
-        f"<b>المصدر:</b> {html.escape(source['name'])}\n"
-        f"<b>الهدف:</b> {html.escape(target['name'])}\n\n"
-        "<b>سيتم نقل محتوى المصدر إلى الهدف، "
-        "ثم حذف المصدر.</b>\n\n"
-        "<b>هل تريد المتابعة؟</b>",
+        "<b>â ï¸ ØªØ£ÙÙØ¯ Ø§ÙØ¯ÙØ¬</b>\n\n"
+        f"<b>Ø§ÙÙØµØ¯Ø±:</b> {html.escape(source['name'])}\n"
+        f"<b>Ø§ÙÙØ¯Ù:</b> {html.escape(target['name'])}\n\n"
+        "<b>Ø³ÙØªÙ ÙÙÙ ÙØ­ØªÙÙ Ø§ÙÙØµØ¯Ø± Ø¥ÙÙ Ø§ÙÙØ¯ÙØ "
+        "Ø«Ù Ø­Ø°Ù Ø§ÙÙØµØ¯Ø±.</b>\n\n"
+        "<b>ÙÙ ØªØ±ÙØ¯ Ø§ÙÙØªØ§Ø¨Ø¹Ø©Ø</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(
-                    "✅ نعم، دمج",
+                    "â ÙØ¹ÙØ Ø¯ÙØ¬",
                     callback_data=f"MERGE_YES:{source_id}:{target_id}"
                 ),
                 InlineKeyboardButton(
-                    "❌ إلغاء",
+                    "â Ø¥ÙØºØ§Ø¡",
                     callback_data=f"EDSEC:{source_id}"
                 )
             ]
@@ -1878,7 +1878,7 @@ async def system_editor(update, context):
     buttons = []
 
     for row in rows:
-        status = "🟢" if row["enabled"] else "🔴"
+        status = "ð¢" if row["enabled"] else "ð´"
 
         buttons.append([
             InlineKeyboardButton(
@@ -1889,14 +1889,14 @@ async def system_editor(update, context):
 
     buttons.append([
         InlineKeyboardButton(
-            "⬅️ محرر الأزرار",
+            "â¬ï¸ ÙØ­Ø±Ø± Ø§ÙØ£Ø²Ø±Ø§Ø±",
             callback_data="ADMIN:BUTTONS"
         )
     ])
 
     await update.callback_query.edit_message_text(
-        "<b>⚙️ محرر أزرار النظام</b>\n\n"
-        "<b>يمكنك تعديل اسم الزر وأيقونته وترتيبه وإظهاره أو إخفاءه.</b>",
+        "<b>âï¸ ÙØ­Ø±Ø± Ø£Ø²Ø±Ø§Ø± Ø§ÙÙØ¸Ø§Ù</b>\n\n"
+        "<b>ÙÙÙÙÙ ØªØ¹Ø¯ÙÙ Ø§Ø³Ù Ø§ÙØ²Ø± ÙØ£ÙÙÙÙØªÙ ÙØªØ±ØªÙØ¨Ù ÙØ¥Ø¸ÙØ§Ø±Ù Ø£Ù Ø¥Ø®ÙØ§Ø¡Ù.</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(buttons)
     )
@@ -1917,39 +1917,39 @@ async def system_button_edit(update, context, key):
         return
 
     await update.callback_query.edit_message_text(
-        f"<b>🧩 تعديل زر:</b>\n\n"
+        f"<b>ð§© ØªØ¹Ø¯ÙÙ Ø²Ø±:</b>\n\n"
         f"{row['icon']} <b>{html.escape(row['label'])}</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(
-                    "✏️ تعديل الاسم",
+                    "âï¸ ØªØ¹Ø¯ÙÙ Ø§ÙØ§Ø³Ù",
                     callback_data=f"SYS_RENAME:{key}"
                 ),
                 InlineKeyboardButton(
-                    "🎨 تعديل الأيقونة",
+                    "ð¨ ØªØ¹Ø¯ÙÙ Ø§ÙØ£ÙÙÙÙØ©",
                     callback_data=f"SYS_ICON:{key}"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "👁 إظهار/إخفاء",
+                    "ð Ø¥Ø¸ÙØ§Ø±/Ø¥Ø®ÙØ§Ø¡",
                     callback_data=f"SYS_TOGGLE:{key}"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "⬆️ رفع",
+                    "â¬ï¸ Ø±ÙØ¹",
                     callback_data=f"SYS_UP:{key}"
                 ),
                 InlineKeyboardButton(
-                    "⬇️ تنزيل",
+                    "â¬ï¸ ØªÙØ²ÙÙ",
                     callback_data=f"SYS_DOWN:{key}"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "⬅️ رجوع",
+                    "â¬ï¸ Ø±Ø¬ÙØ¹",
                     callback_data="ED:SYSTEM"
                 )
             ]
@@ -1963,26 +1963,26 @@ async def system_button_edit(update, context, key):
 
 async def content_editor(update, context):
     await update.callback_query.edit_message_text(
-        "<b>📝 تعديل المشاركات</b>\n\n"
-        "<b>اختر القسم الذي تريد إدارة محتواه.</b>\n\n"
-        "📄 PDF\n"
-        "🖼 صورة\n"
-        "🎬 فيديو\n"
-        "📎 ملف\n"
-        "🎵 صوت\n"
-        "💬 نص\n"
-        "وأي نوع محتوى يسمح به Telegram.",
+        "<b>ð ØªØ¹Ø¯ÙÙ Ø§ÙÙØ´Ø§Ø±ÙØ§Øª</b>\n\n"
+        "<b>Ø§Ø®ØªØ± Ø§ÙÙØ³Ù Ø§ÙØ°Ù ØªØ±ÙØ¯ Ø¥Ø¯Ø§Ø±Ø© ÙØ­ØªÙØ§Ù.</b>\n\n"
+        "ð PDF\n"
+        "ð¼ ØµÙØ±Ø©\n"
+        "ð¬ ÙÙØ¯ÙÙ\n"
+        "ð ÙÙÙ\n"
+        "ðµ ØµÙØª\n"
+        "ð¬ ÙØµ\n"
+        "ÙØ£Ù ÙÙØ¹ ÙØ­ØªÙÙ ÙØ³ÙØ­ Ø¨Ù Telegram.",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(
-                    "📂 اختيار القسم",
+                    "ð Ø§Ø®ØªÙØ§Ø± Ø§ÙÙØ³Ù",
                     callback_data="CONTENT:BROWSE:ROOT"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "⬅️ لوحة الإدارة",
+                    "â¬ï¸ ÙÙØ­Ø© Ø§ÙØ¥Ø¯Ø§Ø±Ø©",
                     callback_data="ADMIN:HOME"
                 )
             ]
@@ -2003,7 +2003,7 @@ async def content_browse(update, context, parent_id):
 
         buttons.append([
             InlineKeyboardButton(
-                "➕ إضافة مشاركة لهذا القسم",
+                "â Ø¥Ø¶Ø§ÙØ© ÙØ´Ø§Ø±ÙØ© ÙÙØ°Ø§ Ø§ÙÙØ³Ù",
                 callback_data=f"CONTENT:ADD:{section['id']}"
             )
         ])
@@ -2018,13 +2018,13 @@ async def content_browse(update, context, parent_id):
 
     buttons.append([
         InlineKeyboardButton(
-            "⬅️ رجوع",
+            "â¬ï¸ Ø±Ø¬ÙØ¹",
             callback_data="ADMIN:CONTENT"
         )
     ])
 
     await update.callback_query.edit_message_text(
-        "<b>📂 اختر القسم:</b>",
+        "<b>ð Ø§Ø®ØªØ± Ø§ÙÙØ³Ù:</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(buttons)
     )
@@ -2038,7 +2038,7 @@ async def content_section(update, context, section_id):
     buttons = [
         [
             InlineKeyboardButton(
-                "➕ إضافة مشاركة",
+                "â Ø¥Ø¶Ø§ÙØ© ÙØ´Ø§Ø±ÙØ©",
                 callback_data=f"CONTENT:ADD:{section_id}"
             )
         ]
@@ -2047,7 +2047,7 @@ async def content_section(update, context, section_id):
     for item in contents:
         buttons.append([
             InlineKeyboardButton(
-                f"📝 مشاركة #{item['id']} — {item['content_type']}",
+                f"ð ÙØ´Ø§Ø±ÙØ© #{item['id']} â {item['content_type']}",
                 callback_data=f"CONTENT:EDIT:{item['id']}"
             )
         ])
@@ -2055,22 +2055,22 @@ async def content_section(update, context, section_id):
     for child in children:
         buttons.append([
             InlineKeyboardButton(
-                f"📁 {child['name']}",
+                f"ð {child['name']}",
                 callback_data=f"CONTENT:OPEN:{child['id']}"
             )
         ])
 
     buttons.append([
         InlineKeyboardButton(
-            "⬅️ رجوع",
+            "â¬ï¸ Ø±Ø¬ÙØ¹",
             callback_data=f"CONTENT:BROWSE:{section['parent_id'] if section['parent_id'] is not None else 'ROOT'}"
         )
     ])
 
     await update.callback_query.edit_message_text(
-        f"<b>📝 محتوى:</b> "
+        f"<b>ð ÙØ­ØªÙÙ:</b> "
         f"{html.escape(section['name'])}\n\n"
-        f"<b>عدد المشاركات:</b> {len(contents)}",
+        f"<b>Ø¹Ø¯Ø¯ Ø§ÙÙØ´Ø§Ø±ÙØ§Øª:</b> {len(contents)}",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(buttons)
     )
@@ -2083,19 +2083,19 @@ async def ask_add_content(update, context, section_id):
     context.user_data["content_section_id"] = section_id
 
     await update.callback_query.edit_message_text(
-        f"<b>➕ إضافة مشاركة إلى:</b>\n"
+        f"<b>â Ø¥Ø¶Ø§ÙØ© ÙØ´Ø§Ø±ÙØ© Ø¥ÙÙ:</b>\n"
         f"<b>{html.escape(section['name'])}</b>\n\n"
-        "<b>أرسل الآن المحتوى نفسه.</b>\n\n"
-        "يمكنك إرسال:\n"
-        "📄 PDF\n"
-        "🖼 صورة\n"
-        "🎬 فيديو\n"
-        "📎 ملف\n"
-        "🎵 صوت\n"
-        "💬 نص\n\n"
-        "<b>أو قم بإعادة توجيه رسالة من محادثة أخرى.</b>\n\n"
-        "<b>البوت يتعرف على نوع المحتوى تلقائياً.</b>\n\n"
-        "<b>للإلغاء:</b> /cancel",
+        "<b>Ø£Ø±Ø³Ù Ø§ÙØ¢Ù Ø§ÙÙØ­ØªÙÙ ÙÙØ³Ù.</b>\n\n"
+        "ÙÙÙÙÙ Ø¥Ø±Ø³Ø§Ù:\n"
+        "ð PDF\n"
+        "ð¼ ØµÙØ±Ø©\n"
+        "ð¬ ÙÙØ¯ÙÙ\n"
+        "ð ÙÙÙ\n"
+        "ðµ ØµÙØª\n"
+        "ð¬ ÙØµ\n\n"
+        "<b>Ø£Ù ÙÙ Ø¨Ø¥Ø¹Ø§Ø¯Ø© ØªÙØ¬ÙÙ Ø±Ø³Ø§ÙØ© ÙÙ ÙØ­Ø§Ø¯Ø«Ø© Ø£Ø®Ø±Ù.</b>\n\n"
+        "<b>Ø§ÙØ¨ÙØª ÙØªØ¹Ø±Ù Ø¹ÙÙ ÙÙØ¹ Ø§ÙÙØ­ØªÙÙ ØªÙÙØ§Ø¦ÙØ§Ù.</b>\n\n"
+        "<b>ÙÙØ¥ÙØºØ§Ø¡:</b> /cancel",
         parse_mode=ParseMode.HTML
     )
 
@@ -2167,33 +2167,33 @@ async def ask_edit_content(update, context, content_id):
 
     if not row:
         await update.callback_query.answer(
-            "المشاركة غير موجودة.",
+            "Ø§ÙÙØ´Ø§Ø±ÙØ© ØºÙØ± ÙÙØ¬ÙØ¯Ø©.",
             show_alert=True
         )
         return
 
     await update.callback_query.edit_message_text(
-        f"<b>📝 المشاركة #{content_id}</b>\n\n"
-        f"<b>القسم:</b> {html.escape(row['section_name'])}\n"
-        f"<b>النوع:</b> {html.escape(row['content_type'])}\n\n"
-        "<b>اختر العملية:</b>",
+        f"<b>ð Ø§ÙÙØ´Ø§Ø±ÙØ© #{content_id}</b>\n\n"
+        f"<b>Ø§ÙÙØ³Ù:</b> {html.escape(row['section_name'])}\n"
+        f"<b>Ø§ÙÙÙØ¹:</b> {html.escape(row['content_type'])}\n\n"
+        "<b>Ø§Ø®ØªØ± Ø§ÙØ¹ÙÙÙØ©:</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(
-                    "🔄 استبدال المحتوى",
+                    "ð Ø§Ø³ØªØ¨Ø¯Ø§Ù Ø§ÙÙØ­ØªÙÙ",
                     callback_data=f"CONTENT:REPLACE:{content_id}"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "🗑 حذف المشاركة",
+                    "ð Ø­Ø°Ù Ø§ÙÙØ´Ø§Ø±ÙØ©",
                     callback_data=f"CONTENT:DELETE:{content_id}"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "⬅️ رجوع",
+                    "â¬ï¸ Ø±Ø¬ÙØ¹",
                     callback_data=f"CONTENT:OPEN:{row['section_id']}"
                 )
             ]
@@ -2206,10 +2206,10 @@ async def replace_content(update, context, content_id):
     context.user_data["replace_content_id"] = content_id
 
     await update.callback_query.edit_message_text(
-        "<b>🔄 استبدال المشاركة</b>\n\n"
-        "<b>أرسل المحتوى الجديد الآن.</b>\n\n"
-        "<b>لا تحتاج لتحديد PDF أو صورة أو فيديو.</b>\n"
-        "<b>البوت يتعرف عليه تلقائياً.</b>",
+        "<b>ð Ø§Ø³ØªØ¨Ø¯Ø§Ù Ø§ÙÙØ´Ø§Ø±ÙØ©</b>\n\n"
+        "<b>Ø£Ø±Ø³Ù Ø§ÙÙØ­ØªÙÙ Ø§ÙØ¬Ø¯ÙØ¯ Ø§ÙØ¢Ù.</b>\n\n"
+        "<b>ÙØ§ ØªØ­ØªØ§Ø¬ ÙØªØ­Ø¯ÙØ¯ PDF Ø£Ù ØµÙØ±Ø© Ø£Ù ÙÙØ¯ÙÙ.</b>\n"
+        "<b>Ø§ÙØ¨ÙØª ÙØªØ¹Ø±Ù Ø¹ÙÙÙ ØªÙÙØ§Ø¦ÙØ§Ù.</b>",
         parse_mode=ParseMode.HTML
     )
 
@@ -2228,19 +2228,19 @@ async def confirm_delete_content(update, context, content_id):
         return
 
     await update.callback_query.edit_message_text(
-        "<b>⚠️ تأكيد حذف المشاركة</b>\n\n"
-        f"<b>رقم المشاركة:</b> {content_id}\n"
-        f"<b>النوع:</b> {html.escape(row['content_type'])}\n\n"
-        "<b>هل تريد حذفها؟</b>",
+        "<b>â ï¸ ØªØ£ÙÙØ¯ Ø­Ø°Ù Ø§ÙÙØ´Ø§Ø±ÙØ©</b>\n\n"
+        f"<b>Ø±ÙÙ Ø§ÙÙØ´Ø§Ø±ÙØ©:</b> {content_id}\n"
+        f"<b>Ø§ÙÙÙØ¹:</b> {html.escape(row['content_type'])}\n\n"
+        "<b>ÙÙ ØªØ±ÙØ¯ Ø­Ø°ÙÙØ§Ø</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(
-                    "✅ نعم، حذف",
+                    "â ÙØ¹ÙØ Ø­Ø°Ù",
                     callback_data=f"CONTENT:DELETE_YES:{content_id}"
                 ),
                 InlineKeyboardButton(
-                    "❌ إلغاء",
+                    "â Ø¥ÙØºØ§Ø¡",
                     callback_data=f"CONTENT:EDIT:{content_id}"
                 )
             ]
@@ -2284,18 +2284,18 @@ async def admin_stats(update, context):
     average = f"{avg:.2f}" if avg else "0"
 
     await update.callback_query.edit_message_text(
-        "<b>📊 إحصائيات البوت</b>\n\n"
-        f"👥 المستخدمون: <b>{users}</b>\n"
-        f"📂 الأقسام: <b>{sections}</b>\n"
-        f"📝 المشاركات: <b>{contents}</b>\n"
-        f"⭐ التقييمات: <b>{ratings}</b>\n"
-        f"⭐ متوسط التقييم: <b>{average}</b>\n"
-        f"✉️ المراسلات: <b>{notes}</b>",
+        "<b>ð Ø¥Ø­ØµØ§Ø¦ÙØ§Øª Ø§ÙØ¨ÙØª</b>\n\n"
+        f"ð¥ Ø§ÙÙØ³ØªØ®Ø¯ÙÙÙ: <b>{users}</b>\n"
+        f"ð Ø§ÙØ£ÙØ³Ø§Ù: <b>{sections}</b>\n"
+        f"ð Ø§ÙÙØ´Ø§Ø±ÙØ§Øª: <b>{contents}</b>\n"
+        f"â­ Ø§ÙØªÙÙÙÙØ§Øª: <b>{ratings}</b>\n"
+        f"â­ ÙØªÙØ³Ø· Ø§ÙØªÙÙÙÙ: <b>{average}</b>\n"
+        f"âï¸ Ø§ÙÙØ±Ø§Ø³ÙØ§Øª: <b>{notes}</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(
-                    "⬅️ لوحة الإدارة",
+                    "â¬ï¸ ÙÙØ­Ø© Ø§ÙØ¥Ø¯Ø§Ø±Ø©",
                     callback_data="ADMIN:HOME"
                 )
             ]
@@ -2327,22 +2327,22 @@ async def admin_notes(update, context):
 
     conn.close()
 
-    text = "<b>✉️ آخر المراسلات</b>\n\n"
+    text = "<b>âï¸ Ø¢Ø®Ø± Ø§ÙÙØ±Ø§Ø³ÙØ§Øª</b>\n\n"
 
     if not rows:
-        text += "<b>لا توجد مراسلات.</b>"
+        text += "<b>ÙØ§ ØªÙØ¬Ø¯ ÙØ±Ø§Ø³ÙØ§Øª.</b>"
     else:
         for row in rows:
-            name = row["first_name"] or "مستخدم"
-            section = row["section_name"] or "عام"
+            name = row["first_name"] or "ÙØ³ØªØ®Ø¯Ù"
+            section = row["section_name"] or "Ø¹Ø§Ù"
 
             short = row["text"][:200]
 
             text += (
-                f"🆔 <b>{row['id']}</b>\n"
-                f"👤 <b>{html.escape(name)}</b>\n"
-                f"📂 <b>{html.escape(section)}</b>\n"
-                f"📝 {html.escape(short)}\n\n"
+                f"ð <b>{row['id']}</b>\n"
+                f"ð¤ <b>{html.escape(name)}</b>\n"
+                f"ð <b>{html.escape(section)}</b>\n"
+                f"ð {html.escape(short)}\n\n"
             )
 
     await update.callback_query.edit_message_text(
@@ -2351,7 +2351,7 @@ async def admin_notes(update, context):
         reply_markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(
-                    "⬅️ لوحة الإدارة",
+                    "â¬ï¸ ÙÙØ­Ø© Ø§ÙØ¥Ø¯Ø§Ø±Ø©",
                     callback_data="ADMIN:HOME"
                 )
             ]
@@ -2382,17 +2382,17 @@ async def admin_ratings(update, context):
     conn.close()
 
     text = (
-        "<b>⭐ التقييمات</b>\n\n"
-        f"<b>المتوسط:</b> "
+        "<b>â­ Ø§ÙØªÙÙÙÙØ§Øª</b>\n\n"
+        f"<b>Ø§ÙÙØªÙØ³Ø·:</b> "
         f"{avg:.2f}" if avg else
-        "<b>المتوسط:</b> 0"
+        "<b>Ø§ÙÙØªÙØ³Ø·:</b> 0"
     )
 
     text += "\n\n"
 
     for row in rows:
         text += (
-            f"{'⭐' * row['rating']} "
+            f"{'â­' * row['rating']} "
             f"<b>{row['total']}</b>\n"
         )
 
@@ -2402,7 +2402,7 @@ async def admin_ratings(update, context):
         reply_markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(
-                    "⬅️ لوحة الإدارة",
+                    "â¬ï¸ ÙÙØ­Ø© Ø§ÙØ¥Ø¯Ø§Ø±Ø©",
                     callback_data="ADMIN:HOME"
                 )
             ]
@@ -2421,39 +2421,39 @@ async def admin_settings(update, context):
     notes = get_setting("notes_enabled", "1")
 
     def status(v):
-        return "🟢 يعمل" if v == "1" else "🔴 متوقف"
+        return "ð¢ ÙØ¹ÙÙ" if v == "1" else "ð´ ÙØªÙÙÙ"
 
     await update.callback_query.edit_message_text(
-        "<b>⚙️ إعدادات البوت</b>\n\n"
-        f"👋 الترحيب: <b>{status(welcome)}</b>\n"
-        f"🆕 إشعار مستخدم جديد: <b>{status(new_users)}</b>\n"
-        f"⭐ التقييم: <b>{status(rating)}</b>\n"
-        f"✉️ الملاحظات: <b>{status(notes)}</b>",
+        "<b>âï¸ Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª Ø§ÙØ¨ÙØª</b>\n\n"
+        f"ð Ø§ÙØªØ±Ø­ÙØ¨: <b>{status(welcome)}</b>\n"
+        f"ð Ø¥Ø´Ø¹Ø§Ø± ÙØ³ØªØ®Ø¯Ù Ø¬Ø¯ÙØ¯: <b>{status(new_users)}</b>\n"
+        f"â­ Ø§ÙØªÙÙÙÙ: <b>{status(rating)}</b>\n"
+        f"âï¸ Ø§ÙÙÙØ§Ø­Ø¸Ø§Øª: <b>{status(notes)}</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(
-                    "👋 الترحيب",
+                    "ð Ø§ÙØªØ±Ø­ÙØ¨",
                     callback_data="SETTING:welcome_enabled"
                 ),
                 InlineKeyboardButton(
-                    "🆕 إشعارات",
+                    "ð Ø¥Ø´Ø¹Ø§Ø±Ø§Øª",
                     callback_data="SETTING:new_user_notifications"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "⭐ التقييم",
+                    "â­ Ø§ÙØªÙÙÙÙ",
                     callback_data="SETTING:rating_enabled"
                 ),
                 InlineKeyboardButton(
-                    "✉️ الملاحظات",
+                    "âï¸ Ø§ÙÙÙØ§Ø­Ø¸Ø§Øª",
                     callback_data="SETTING:notes_enabled"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "⬅️ لوحة الإدارة",
+                    "â¬ï¸ ÙÙØ­Ø© Ø§ÙØ¥Ø¯Ø§Ø±Ø©",
                     callback_data="ADMIN:HOME"
                 )
             ]
@@ -2493,7 +2493,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
 
         await query.edit_message_text(
-            "<b>❌ تم الإلغاء.</b>",
+            "<b>â ØªÙ Ø§ÙØ¥ÙØºØ§Ø¡.</b>",
             parse_mode=ParseMode.HTML,
             reply_markup=main_keyboard(user.id)
         )
@@ -2540,9 +2540,9 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         await query.answer(
-            "⭐ تمت الإضافة للمفضلة."
+            "â­ ØªÙØª Ø§ÙØ¥Ø¶Ø§ÙØ© ÙÙÙÙØ¶ÙØ©."
             if result
-            else "تمت الإزالة من المفضلة.",
+            else "ØªÙØª Ø§ÙØ¥Ø²Ø§ÙØ© ÙÙ Ø§ÙÙÙØ¶ÙØ©.",
             show_alert=True
         )
 
@@ -2737,16 +2737,16 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             delete_section(section_id)
     
             await query.edit_message_text(
-                "<b>✅ تم حذف القسم ومحتوياته بنجاح.</b>",
+                "<b>â ØªÙ Ø­Ø°Ù Ø§ÙÙØ³Ù ÙÙØ­ØªÙÙØ§ØªÙ Ø¨ÙØ¬Ø§Ø­.</b>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
                     [
                         InlineKeyboardButton(
-                            "🧩 محرر الأزرار",
+                            "ð§© ÙØ­Ø±Ø± Ø§ÙØ£Ø²Ø±Ø§Ø±",
                             callback_data="ADMIN:BUTTONS"
                         ),
                         InlineKeyboardButton(
-                            "🏠 الرئيسية",
+                            "ð  Ø§ÙØ±Ø¦ÙØ³ÙØ©",
                             callback_data="MAIN"
                         )
                     ]
@@ -2787,12 +2787,12 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
             await query.edit_message_text(
-                "<b>✅ تم نقل القسم بنجاح.</b>",
+                "<b>â ØªÙ ÙÙÙ Ø§ÙÙØ³Ù Ø¨ÙØ¬Ø§Ø­.</b>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
                     [
                         InlineKeyboardButton(
-                            "🧩 محرر الأزرار",
+                            "ð§© ÙØ­Ø±Ø± Ø§ÙØ£Ø²Ø±Ø§Ø±",
                             callback_data="ADMIN:BUTTONS"
                         )
                     ]
@@ -2834,12 +2834,12 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
             await query.edit_message_text(
-                "<b>✅ تم دمج الأقسام بنجاح.</b>",
+                "<b>â ØªÙ Ø¯ÙØ¬ Ø§ÙØ£ÙØ³Ø§Ù Ø¨ÙØ¬Ø§Ø­.</b>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
                     [
                         InlineKeyboardButton(
-                            "🧩 محرر الأزرار",
+                            "ð§© ÙØ­Ø±Ø± Ø§ÙØ£Ø²Ø±Ø§Ø±",
                             callback_data="ADMIN:BUTTONS"
                         )
                     ]
@@ -3035,8 +3035,8 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["system_key"] = key
 
             await query.edit_message_text(
-                "<b>✏️ أرسل الاسم الجديد للزر:</b>\n\n"
-                "<b>للإلغاء:</b> /cancel",
+                "<b>âï¸ Ø£Ø±Ø³Ù Ø§ÙØ§Ø³Ù Ø§ÙØ¬Ø¯ÙØ¯ ÙÙØ²Ø±:</b>\n\n"
+                "<b>ÙÙØ¥ÙØºØ§Ø¡:</b> /cancel",
                 parse_mode=ParseMode.HTML
             )
         return
@@ -3049,7 +3049,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["system_key"] = key
 
             await query.edit_message_text(
-                "<b>🎨 أرسل الأيقونة الجديدة:</b>",
+                "<b>ð¨ Ø£Ø±Ø³Ù Ø§ÙØ£ÙÙÙÙØ© Ø§ÙØ¬Ø¯ÙØ¯Ø©:</b>",
                 parse_mode=ParseMode.HTML
             )
         return
@@ -3187,7 +3187,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
 
         await update.message.reply_text(
-            "<b>❌ تم إلغاء العملية.</b>",
+            "<b>â ØªÙ Ø¥ÙØºØ§Ø¡ Ø§ÙØ¹ÙÙÙØ©.</b>",
             parse_mode=ParseMode.HTML,
             reply_markup=(
                 admin_keyboard()
@@ -3210,7 +3210,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if state == "add_section":
             if not update.message.text:
                 await update.message.reply_text(
-                    "<b>أرسل اسم القسم كنص.</b>",
+                    "<b>Ø£Ø±Ø³Ù Ø§Ø³Ù Ø§ÙÙØ³Ù ÙÙØµ.</b>",
                     parse_mode=ParseMode.HTML
                 )
                 return
@@ -3230,17 +3230,17 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
 
             await update.message.reply_text(
-                "<b>✅ تم إنشاء القسم بنجاح.</b>\n\n"
+                "<b>â ØªÙ Ø¥ÙØ´Ø§Ø¡ Ø§ÙÙØ³Ù Ø¨ÙØ¬Ø§Ø­.</b>\n\n"
                 f"<b>{html.escape(name)}</b>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
                     [
                         InlineKeyboardButton(
-                            "🧩 محرر الأزرار",
+                            "ð§© ÙØ­Ø±Ø± Ø§ÙØ£Ø²Ø±Ø§Ø±",
                             callback_data="ADMIN:BUTTONS"
                         ),
                         InlineKeyboardButton(
-                            "🏠 الرئيسية",
+                            "ð  Ø§ÙØ±Ø¦ÙØ³ÙØ©",
                             callback_data="MAIN"
                         )
                     ]
@@ -3279,12 +3279,12 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
 
             await update.message.reply_text(
-                "<b>✅ تم تعديل اسم القسم.</b>",
+                "<b>â ØªÙ ØªØ¹Ø¯ÙÙ Ø§Ø³Ù Ø§ÙÙØ³Ù.</b>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
                     [
                         InlineKeyboardButton(
-                            "🧩 محرر الأزرار",
+                            "ð§© ÙØ­Ø±Ø± Ø§ÙØ£Ø²Ø±Ø§Ø±",
                             callback_data="ADMIN:BUTTONS"
                         )
                     ]
@@ -3323,12 +3323,12 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
 
             await update.message.reply_text(
-                "<b>✅ تم تعديل الأيقونة.</b>",
+                "<b>â ØªÙ ØªØ¹Ø¯ÙÙ Ø§ÙØ£ÙÙÙÙØ©.</b>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
                     [
                         InlineKeyboardButton(
-                            "🧩 محرر الأزرار",
+                            "ð§© ÙØ­Ø±Ø± Ø§ÙØ£Ø²Ø±Ø§Ø±",
                             callback_data="ADMIN:BUTTONS"
                         )
                     ]
@@ -3359,20 +3359,20 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
 
             await update.message.reply_text(
-                "<b>✅ تم حفظ المشاركة.</b>\n\n"
-                f"<b>النوع:</b> {html.escape(content_type)}\n"
-                f"<b>رقم المشاركة:</b> {content_id}\n\n"
-                "<b>عند ضغط المستخدم على القسم، "
-                "سيتم إرسال المحتوى تلقائياً.</b>",
+                "<b>â ØªÙ Ø­ÙØ¸ Ø§ÙÙØ´Ø§Ø±ÙØ©.</b>\n\n"
+                f"<b>Ø§ÙÙÙØ¹:</b> {html.escape(content_type)}\n"
+                f"<b>Ø±ÙÙ Ø§ÙÙØ´Ø§Ø±ÙØ©:</b> {content_id}\n\n"
+                "<b>Ø¹ÙØ¯ Ø¶ØºØ· Ø§ÙÙØ³ØªØ®Ø¯Ù Ø¹ÙÙ Ø§ÙÙØ³ÙØ "
+                "Ø³ÙØªÙ Ø¥Ø±Ø³Ø§Ù Ø§ÙÙØ­ØªÙÙ ØªÙÙØ§Ø¦ÙØ§Ù.</b>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
                     [
                         InlineKeyboardButton(
-                            "📝 تعديل المشاركات",
+                            "ð ØªØ¹Ø¯ÙÙ Ø§ÙÙØ´Ø§Ø±ÙØ§Øª",
                             callback_data="ADMIN:CONTENT"
                         ),
                         InlineKeyboardButton(
-                            "🔐 لوحة الإدارة",
+                            "ð ÙÙØ­Ø© Ø§ÙØ¥Ø¯Ø§Ø±Ø©",
                             callback_data="ADMIN:HOME"
                         )
                     ]
@@ -3414,12 +3414,12 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
 
             await update.message.reply_text(
-                "<b>✅ تم استبدال المحتوى بنجاح.</b>",
+                "<b>â ØªÙ Ø§Ø³ØªØ¨Ø¯Ø§Ù Ø§ÙÙØ­ØªÙÙ Ø¨ÙØ¬Ø§Ø­.</b>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
                     [
                         InlineKeyboardButton(
-                            "📝 تعديل المشاركات",
+                            "ð ØªØ¹Ø¯ÙÙ Ø§ÙÙØ´Ø§Ø±ÙØ§Øª",
                             callback_data="ADMIN:CONTENT"
                         )
                     ]
@@ -3456,12 +3456,12 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
 
             await update.message.reply_text(
-                "<b>✅ تم تعديل اسم الزر.</b>",
+                "<b>â ØªÙ ØªØ¹Ø¯ÙÙ Ø§Ø³Ù Ø§ÙØ²Ø±.</b>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
                     [
                         InlineKeyboardButton(
-                            "⚙️ أزرار النظام",
+                            "âï¸ Ø£Ø²Ø±Ø§Ø± Ø§ÙÙØ¸Ø§Ù",
                             callback_data="ED:SYSTEM"
                         )
                     ]
@@ -3498,12 +3498,12 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
 
             await update.message.reply_text(
-                "<b>✅ تم تعديل أيقونة الزر.</b>",
+                "<b>â ØªÙ ØªØ¹Ø¯ÙÙ Ø£ÙÙÙÙØ© Ø§ÙØ²Ø±.</b>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
                     [
                         InlineKeyboardButton(
-                            "⚙️ أزرار النظام",
+                            "âï¸ Ø£Ø²Ø±Ø§Ø± Ø§ÙÙØ¸Ø§Ù",
                             callback_data="ED:SYSTEM"
                         )
                     ]
@@ -3522,7 +3522,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not update.message.text:
             await update.message.reply_text(
-                "<b>أرسل الملاحظة كنص.</b>",
+                "<b>Ø£Ø±Ø³Ù Ø§ÙÙÙØ§Ø­Ø¸Ø© ÙÙØµ.</b>",
                 parse_mode=ParseMode.HTML
             )
             return
@@ -3542,7 +3542,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state == "global_note":
         if not update.message.text:
             await update.message.reply_text(
-                "<b>أرسل الرسالة كنص.</b>",
+                "<b>Ø£Ø±Ø³Ù Ø§ÙØ±Ø³Ø§ÙØ© ÙÙØµ.</b>",
                 parse_mode=ParseMode.HTML
             )
             return
@@ -3567,10 +3567,10 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 ADMIN_ID,
                 (
-                    "✉️ <b>رسالة جديدة من المستخدمين</b>\n\n"
-                    f"👤 <b>{html.escape(user.full_name)}</b>\n"
-                    f"🆔 <code>{user.id}</code>\n\n"
-                    f"📝 {html.escape(update.message.text)}"
+                    "âï¸ <b>Ø±Ø³Ø§ÙØ© Ø¬Ø¯ÙØ¯Ø© ÙÙ Ø§ÙÙØ³ØªØ®Ø¯ÙÙÙ</b>\n\n"
+                    f"ð¤ <b>{html.escape(user.full_name)}</b>\n"
+                    f"ð <code>{user.id}</code>\n\n"
+                    f"ð {html.escape(update.message.text)}"
                 ),
                 parse_mode=ParseMode.HTML
             )
@@ -3580,7 +3580,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
 
         await update.message.reply_text(
-            "<b>✅ وصلت رسالتك إلى الإدارة.</b>",
+            "<b>â ÙØµÙØª Ø±Ø³Ø§ÙØªÙ Ø¥ÙÙ Ø§ÙØ¥Ø¯Ø§Ø±Ø©.</b>",
             parse_mode=ParseMode.HTML,
             reply_markup=main_keyboard(user.id)
         )
@@ -3594,7 +3594,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def admin_command(update, context):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text(
-            "<b>⛔ غير مسموح.</b>",
+            "<b>â ØºÙØ± ÙØ³ÙÙØ­.</b>",
             parse_mode=ParseMode.HTML
         )
         return
@@ -3653,20 +3653,20 @@ def main():
     # WEBHOOK - Render
     # --------------------------------------------------------
     #
-    # مهم:
-    # هذا الكود لا يستخدم polling / getUpdates.
-    # لذلك يمنع مشكلة:
+    # ÙÙÙ:
+    # ÙØ°Ø§ Ø§ÙÙÙØ¯ ÙØ§ ÙØ³ØªØ®Ø¯Ù polling / getUpdates.
+    # ÙØ°ÙÙ ÙÙÙØ¹ ÙØ´ÙÙØ©:
     #
     # telegram.error.Conflict:
     # terminated by other getUpdates request
     #
-    # بشرط أن تكون هناك نسخة واحدة فقط من الخدمة على Render.
+    # Ø¨Ø´Ø±Ø· Ø£Ù ØªÙÙÙ ÙÙØ§Ù ÙØ³Ø®Ø© ÙØ§Ø­Ø¯Ø© ÙÙØ· ÙÙ Ø§ÙØ®Ø¯ÙØ© Ø¹ÙÙ Render.
     # --------------------------------------------------------
 
     if not RENDER_URL:
         raise RuntimeError(
-            "RENDER_EXTERNAL_URL غير موجود. "
-            "هذا الكود مخصص للتشغيل على Render Web Service."
+            "RENDER_EXTERNAL_URL ØºÙØ± ÙÙØ¬ÙØ¯. "
+            "ÙØ°Ø§ Ø§ÙÙÙØ¯ ÙØ®ØµØµ ÙÙØªØ´ØºÙÙ Ø¹ÙÙ Render Web Service."
         )
 
     webhook_url = (

@@ -1,4 +1,5 @@
 import logging
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     ApplicationBuilder,
@@ -12,8 +13,10 @@ from telegram.ext import (
 # ---------------------------------------------------------
 # الإعدادات الأساسية
 # ---------------------------------------------------------
-# يرجى التأكد من تعريف كائن BOT_TOKEN في الملف الأساسي
-ADMIN_ID = 5734654153  # تم إضافة معرف الأدمن الخاص بك
+# جلب التوكن من متغيرات البيئة في Render
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+ADMIN_ID = 5734654153  # معرف الأدمن الخاص بك
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -204,7 +207,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 # التشغيل الرئيسي
 # ---------------------------------------------------------
 def main():
-    # الاعتماد على كائن BOT_TOKEN الخارجي المعرف في مشروعك
+    # التحقق من وجود توكن البوت
+    if not BOT_TOKEN:
+        raise ValueError("خطأ: لم يتم العثور على BOT_TOKEN! تأكد من إضافته في قسم Environment على Render.")
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start_command))

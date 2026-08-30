@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
@@ -204,10 +205,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
 # ---------------------------------------------------------
-# التشغيل الرئيسي
+# التشغيل الرئيسي (Asyncio Compatible for Render)
 # ---------------------------------------------------------
-def main():
-    # التحقق من وجود توكن البوت
+async def main_async():
     if not BOT_TOKEN:
         raise ValueError("خطأ: لم يتم العثور على BOT_TOKEN! تأكد من إضافته في قسم Environment على Render.")
 
@@ -218,7 +218,16 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_callback_query))
 
     print("تم تشغيل البوت بنجاح...")
-    app.run_polling()
+
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    
+    # الإبقاء على البوت يعمّل باستمرار
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main_async())
+    except (KeyboardInterrupt, SystemExit):
+        pass

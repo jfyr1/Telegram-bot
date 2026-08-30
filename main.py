@@ -8,8 +8,6 @@ SQLite
 
 IMPORTANT:
 - Put BOT_TOKEN and ADMIN_ID in Environment Variables.
-- Optional REQUIRED_CHANNEL = @channel_username
-- Optional REQUIRED_CHANNEL_URL = https://t.me/channel_username
 - Never put your BotFather token directly in this file.
 """
 
@@ -50,8 +48,6 @@ os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
 # معرف الأدمن الأساسي
-# يمكن تغييره من Render عبر ADMIN_ID، وإذا لم يكن موجوداً
-# سيستخدم هذا المعرف تلقائياً.
 ADMIN_ID = 5734654153
 
 def is_admin(user_id):
@@ -61,17 +57,11 @@ def is_admin(user_id):
     except (TypeError, ValueError):
         return False
 
-ADMIN_ID = 5734654153
 PORT = int(os.getenv("PORT", "10000") or 10000)
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
 WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "telegram-webhook").strip("/")
 
 DB_FILE = os.getenv("DB_FILE", "bot.db")
-
-# Example: @my_channel
-REQUIRED_CHANNEL = os.getenv("REQUIRED_CHANNEL", "").strip()
-# Example: https://t.me/my_channel
-REQUIRED_CHANNEL_URL = os.getenv("REQUIRED_CHANNEL_URL", "").strip()
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is missing.")
@@ -86,15 +76,11 @@ logger = logging.getLogger("universal-menu-bot")
 
 
 def repair_mojibake(value):
-    """Repair common UTF-8 -> Latin-1/Windows-1252 mojibake safely.
-
-    Existing database rows from an older broken build may contain text such as
-    ``Ø§Ù...`` or emoji rendered as ``ð...``. New text is left untouched.
-    """
+    """Repair common UTF-8 -> Latin-1/Windows-1252 mojibake safely."""
     if not isinstance(value, str) or not value:
         return value
 
-    markers = ("Ø", "Ù", "Ð", "Ã", "Â", "â", "ð", "ï", "�")
+    markers = ("Ø", "Ù", "Ð", "Ã", "Â", "â", "ð", "ï", "")
     if not any(ch in value for ch in markers):
         return value
 
@@ -103,7 +89,6 @@ def repair_mojibake(value):
     except (UnicodeEncodeError, UnicodeDecodeError):
         return value
 
-    # Only keep the conversion when it actually removes mojibake markers.
     old_score = sum(value.count(ch) for ch in markers)
     new_score = sum(repaired.count(ch) for ch in markers)
     return repaired if new_score < old_score else value
@@ -247,7 +232,6 @@ def init_db():
         "about_text": "ℹ️ <b>حول البوت</b>\n\nبوت عام قابل للتخصيص بالكامل من لوحة الإدارة.",
         "maintenance": "0",
         "maintenance_text": "🛠 البوت حالياً تحت الصيانة.\n\n⏳ حاول لاحقاً.",
-        "subscription_text": "🔐 للوصول إلى البوت، يرجى الاشتراك بالقناة أولاً ثم الضغط على زر التحقق.",
         "notifications_text": "🔔 هل تريد استقبال إشعارات عند إضافة محتوى جديد؟",
         "announcement_text": "📢 إعلان جديد",
     }
@@ -258,7 +242,6 @@ def init_db():
             (key, value),
         )
 
-    # Default root buttons. Admin can rename/delete/reorder them.
     root_count = cur.execute(
         "SELECT COUNT(*) AS c FROM buttons WHERE parent_id IS NULL"
     ).fetchone()["c"]
@@ -620,43 +603,6 @@ def default_title(message, ctype):
 
 
 # ============================================================
-# SUBSCRIPTION
-# ============================================================
-
-async def subscription_required(user_id):
-    if not REQUIRED_CHANNEL:
-        return False
-    try:
-        member = await telegram_app.bot.get_chat_member(
-            REQUIRED_CHANNEL, user_id
-        )
-        return member.status in ("creator", "administrator", "member")
-    except Exception as exc:
-        logger.warning("Subscription check failed: %s", exc)
-        # Do not turn a temporary Telegram API error into a permanent lockout.
-        return False
-
-
-async def send_subscription_gate(update):
-    buttons = []
-    if REQUIRED_CHANNEL_URL:
-        buttons.append([
-            InlineKeyboardButton(
-                "📢 الاشتراك بالقناة",
-                url=REQUIRED_CHANNEL_URL
-            )
-        ])
-    buttons.append([
-        InlineKeyboardButton("✅ تحقق من الاشتراك", callback_data="SUB:CHECK")
-    ])
-    await update.effective_message.reply_text(
-        get_setting("subscription_text"),
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(buttons),
-    )
-
-
-# ============================================================
 # KEYBOARDS
 # ============================================================
 
@@ -727,10 +673,6 @@ async def show_button(update, button_id):
 
     user_id = update.effective_user.id
 
-    if await subscription_required(user_id):
-        await send_subscription_gate(update)
-        return
-
     conn = db()
     conn.execute(
         "INSERT INTO visits(user_id,button_id,created_at) VALUES(?,?,?)",
@@ -799,7 +741,6 @@ async def show_button(update, button_id):
         await section_actions(update, button_id)
         return
 
-    # Default menu action.
     children = get_buttons(button_id)
     contents = get_contents(button_id)
 
@@ -925,8 +866,8 @@ async def admin_settings(update, context):
         reply_markup=reply_kb([
             ["✏️ اسم البوت", "🏠 اسم الرئيسية"],
             ["📝 نص الرئيسية", "ℹ️ نص حول البوت"],
-            ["🔐 نص الاشتراك", "🛠 نص الصيانة"],
-            ["🔔 نص الإشعارات", "📢 نص الإعلان"],
+            ["🛠 نص الصيانة", "🔔 نص الإشعارات"],
+            ["📢 نص الإعلان"],
             ["⬅️ رجوع"],
         ]),
     )
@@ -1116,14 +1057,12 @@ async def move_button_start(update, context):
 
 
 async def handle_admin_text(update, context, state, text):
-    # Settings editor
     if state == "ADMIN_SETTINGS":
         mapping = {
             "✏️ اسم البوت": "bot_name",
             "🏠 اسم الرئيسية": "home_title",
             "📝 نص الرئيسية": "home_text",
             "ℹ️ نص حول البوت": "about_text",
-            "🔐 نص الاشتراك": "subscription_text",
             "🛠 نص الصيانة": "maintenance_text",
             "🔔 نص الإشعارات": "notifications_text",
             "📢 نص الإعلان": "announcement_text",
@@ -1148,7 +1087,6 @@ async def handle_admin_text(update, context, state, text):
         )
         return True
 
-    # Add button
     if state == "ADD_BUTTON_TITLE":
         context.user_data["new_button_title"] = text
         context.user_data["state"] = "ADD_BUTTON_PARENT"
@@ -1185,7 +1123,6 @@ async def handle_admin_text(update, context, state, text):
         )
         return True
 
-    # Edit button select
     if state == "EDIT_BUTTON_SELECT":
         bid = parse_id_from_button_text(text)
         if not bid or not get_button(bid):
@@ -1288,7 +1225,6 @@ async def handle_admin_text(update, context, state, text):
             )
             return True
 
-    # Delete confirmation
     if state == "DELETE_BUTTON_SELECT":
         bid = parse_id_from_button_text(text)
         if not bid or not get_button(bid):
@@ -1318,7 +1254,6 @@ async def handle_admin_text(update, context, state, text):
             )
             return True
 
-    # Move
     if state == "MOVE_BUTTON_SELECT":
         bid = parse_id_from_button_text(text)
         if not bid or not get_button(bid):
@@ -1365,7 +1300,6 @@ async def handle_admin_text(update, context, state, text):
             )
             return True
 
-    # Content editor
     if state == "ADD_CONTENT_SELECT":
         bid = parse_id_from_button_text(text)
         if not bid or not get_button(bid):
@@ -1418,9 +1352,6 @@ async def handle_admin_text(update, context, state, text):
 # ============================================================
 
 async def route_media(update, context):
-    # Text messages are handled by the dedicated text router.
-    # This handler is intentionally registered before it so media can be
-    # captured, but text must be delegated explicitly.
     if update.message and update.message.text is not None:
         await handle_text(update, context)
         return
@@ -1518,7 +1449,6 @@ async def handle_text(update, context):
         await update.message.reply_text("🚫 لا يمكنك استخدام البوت.")
         return
 
-    # Admin bypasses subscription and maintenance.
     if user.id == ADMIN_ID:
         if text == "/admin":
             await show_admin(update)
@@ -1621,7 +1551,6 @@ async def handle_text(update, context):
             )
             return
 
-        # Admin state processing.
         state = context.user_data.get("state")
         if state == "ADMIN_BROADCAST":
             await broadcast_preview(update, context); return
@@ -1653,17 +1582,11 @@ async def handle_text(update, context):
             await show_admin(update)
             return
 
-    # Maintenance for normal users.
     if get_setting("maintenance") == "1":
         await update.message.reply_text(
             get_setting("maintenance_text"),
             reply_markup=reply_kb([["🔄 تحديث"]]),
         )
-        return
-
-    # Subscription check on EVERY normal interaction.
-    if await subscription_required(user.id):
-        await send_subscription_gate(update)
         return
 
     state = context.user_data.get("state")
@@ -1785,7 +1708,6 @@ async def handle_text(update, context):
             await show_favorites(update)
         return
 
-    # Content button selection: 📄 ... 〔Cid〕
     if "〔C" in text and text.startswith("📄"):
         try:
             cid = int(text.split("〔C", 1)[1].split("〕", 1)[0])
@@ -1802,7 +1724,6 @@ async def handle_text(update, context):
         except Exception:
             pass
 
-    # Match dynamic button by exact title.
     conn = db()
     row = conn.execute("""
         SELECT id FROM buttons
@@ -1823,33 +1744,6 @@ async def handle_text(update, context):
 
 
 # ============================================================
-# CALLBACKS
-# ============================================================
-
-async def callback_router(update, context):
-    query = update.callback_query
-    await query.answer()
-    user = query.from_user
-
-    if query.data == "SUB:CHECK":
-        if not REQUIRED_CHANNEL:
-            await query.edit_message_text("✅ لا يوجد اشتراك إجباري حالياً.")
-            return
-
-        if await subscription_required(user.id):
-            await query.edit_message_text(
-                "❌ لم يتم التحقق من اشتراكك بعد.\n"
-                "اشترك بالقناة ثم اضغط تحقق مرة أخرى."
-            )
-        else:
-            await query.edit_message_text(
-                "✅ تم التحقق من اشتراكك بنجاح!\n"
-                "ارجع للبوت واختر ما تريد."
-            )
-        return
-
-
-# ============================================================
 # START / WEBHOOK
 # ============================================================
 
@@ -1863,10 +1757,6 @@ async def start(update, context):
     if update.effective_user.id != ADMIN_ID:
         if get_setting("maintenance") == "1":
             await update.message.reply_text(get_setting("maintenance_text"))
-            return
-
-        if await subscription_required(update.effective_user.id):
-            await send_subscription_gate(update)
             return
 
     await show_home(update)
@@ -1896,8 +1786,6 @@ def webhook():
 
 
 async def post_init(application):
-    # Kept as a harmless hook for Application.builder().post_init().
-    # The worker sets telegram_app and configures webhook/polling explicitly.
     global telegram_app
     telegram_app = application
 
@@ -1917,8 +1805,6 @@ def build_application():
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin", show_admin))
-    application.add_handler(CallbackQueryHandler(callback_router))
-    # One non-command router handles both text and media.
     application.add_handler(
         MessageHandler(filters.ALL & ~filters.COMMAND, route_media)
     )
@@ -1926,12 +1812,6 @@ def build_application():
 
 
 def telegram_worker(application):
-    """Run python-telegram-bot on its own asyncio event loop.
-
-    This avoids the Render/Python error:
-    RuntimeError: There is no current event loop in thread 'MainThread'
-    and correctly awaits Updater.start_polling().
-    """
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
@@ -1950,8 +1830,6 @@ def telegram_worker(application):
             )
             logger.info("Webhook configured: %s", url)
         else:
-            # IMPORTANT: start_polling() is a coroutine in current PTB.
-            # It must be awaited inside a running event loop.
             await application.updater.start_polling(
                 drop_pending_updates=True,
                 allowed_updates=Update.ALL_TYPES,
@@ -1994,7 +1872,6 @@ def run():
     repair_database_text()
     application = build_application()
 
-    # Telegram runs on its own asyncio loop.
     t = threading.Thread(
         target=telegram_worker,
         args=(application,),
@@ -2003,7 +1880,6 @@ def run():
     )
     t.start()
 
-    # Render requires the HTTP server to listen on its assigned PORT.
     app.run(
         host="0.0.0.0",
         port=PORT,

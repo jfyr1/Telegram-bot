@@ -1,5 +1,6 @@
-import logging
 import os
+import logging
+from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     ApplicationBuilder,
@@ -15,15 +16,17 @@ from telegram.ext import (
 # ---------------------------------------------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = 5734654153  # معرف الأدمن الخاص بك
-
-# جلب رابط التطبيق والمنفذ المخصص من متغيرات بيئة Render
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 PORT = int(os.getenv("PORT", 8080))
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+
+# إنشاء تطبيق Flask وتطبيق Telegram
+flask_app = Flask(__name__)
+bot_app = ApplicationBuilder().token(BOT_TOKEN).build() if BOT_TOKEN else None
 
 # ---------------------------------------------------------
 # دالة مساعدة لحذف الرسائل القديمة
@@ -61,17 +64,15 @@ def get_admin_keyboard():
     return InlineKeyboardMarkup(keyboard)
 
 # ---------------------------------------------------------
-# الأوامر والمعالجات الأساسية
+# المعالجات (Handlers)
 # ---------------------------------------------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await delete_previous_message(update, context)
-    
     text = (
         "🛠 **أهلاً بك في بوت إدارة المحتوى**\n\n"
         "تم إعادة ضبط البوت إلى الوضع الافتراضي (0 أزرار فرعية).\n"
         "يرجى اختيار أحد الخيارات من القائمة أدناه للبدء بالتصميم:"
     )
-    
     msg = await update.message.reply_text(
         text,
         reply_markup=get_main_keyboard(),
@@ -195,30 +196,32 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             parse_mode="Markdown"
         )
 
+# تسجيل الأوامر والمعالجات
+bot_app.add_handler(CommandHandler("start", start_command))
+bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu_text))
+bot_app.add_handler(CallbackQueryHandler(handle_callback_query))
+
 # ---------------------------------------------------------
-# التشغيل الرئيسي (المطابق لمتطلبات Render و python-telegram-bot v20+)
+# نقاط الاتصال الخاصة بـ Flask Server
 # ---------------------------------------------------------
-def main():
-    if not BOT_TOKEN:
-        raise ValueError("خطأ: لم يتم العثور على BOT_TOKEN!")
+@flask_app.route("/", methods=["GET"])
+def index():
+    return "Bot is running!", 200
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+@flask_app.route(f"/{BOT_TOKEN}", methods=["POST"])
+async def webhook():
+    """استقبال التحديثات من تليجرام وتمريرها للبوت"""
+    json_str = request.get_data(as_text=True)
+    update = Update.de_json(request.get_json(force=True), bot_app.bot)
+    await bot_app.process_update(update)
+    return "OK", 200
 
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu_text))
-    app.add_handler(CallbackQueryHandler(handle_callback_query))
-
-    if RENDER_EXTERNAL_URL:
-        print(f"تشغيل البوت عبر Webhook على Port {PORT}...")
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=BOT_TOKEN,
-            webhook_url=f"{RENDER_EXTERNAL_URL}/{BOT_TOKEN}"
-        )
-    else:
-        print("تشغيل البوت عبر Polling...")
-        app.run_polling()
-
+# ---------------------------------------------------------
+# بدء التشغيل
+# ---------------------------------------------------------
 if __name__ == "__main__":
-    main()
+    if not BOT_TOKEN:
+        raise ValueError("BOT_TOKEN is not set!")
+    
+    # التأكد من ثبات ملفات requirements.txt بوجود Flask
+    flask_app.run(host="0.0.0.0", port=PORT)

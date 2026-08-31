@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
@@ -18,7 +17,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = 5734654153  # معرف الأدمن الخاص بك
 
 # جلب رابط التطبيق والمنفذ المخصص من متغيرات بيئة Render
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")  # مثال: https://your-app.onrender.com
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 PORT = int(os.getenv("PORT", 8080))
 
 logging.basicConfig(
@@ -197,7 +196,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
 # ---------------------------------------------------------
-# التشغيل الرئيسي
+# التشغيل الرئيسي (المطابق لمتطلبات Render و python-telegram-bot v20+)
 # ---------------------------------------------------------
 def main():
     if not BOT_TOKEN:
@@ -209,9 +208,8 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu_text))
     app.add_handler(CallbackQueryHandler(handle_callback_query))
 
-    # إذا كان التطبيق مرفوعاً على Render يستخدم Webhook، وإلا يستخدم Polling محلياً
     if RENDER_EXTERNAL_URL:
-        print("تشغيل البوت بنمط Webhook...")
+        print(f"تشغيل البوت عبر Webhook على Port {PORT}...")
         app.run_webhook(
             listen="0.0.0.0",
             port=PORT,
@@ -219,7 +217,7 @@ def main():
             webhook_url=f"{RENDER_EXTERNAL_URL}/{BOT_TOKEN}"
         )
     else:
-        print("تشغيل البوت بنمط Polling (محلياً)...")
+        print("تشغيل البوت عبر Polling...")
         app.run_polling()
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 import os
 import logging
 import sqlite3
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -15,7 +15,7 @@ from telegram.ext import (
 # الإعدادات وتأمين البيانات
 # ---------------------------------------------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = 5734654153  # معرف الآدمن الخاص بك
+ADMIN_ID = 5734654153  # أدخل ID الحساب الخاص بك كأدمن
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -23,50 +23,85 @@ logging.basicConfig(
 )
 
 # ---------------------------------------------------------
-# قاعدة البيانات (SQLite) لتخزين الأزرار والمستخدمين
+# محرك قاعدة البيانات الديناميكي
 # ---------------------------------------------------------
 def init_db():
-    conn = sqlite3.connect("bot_data.db")
+    conn = sqlite3.connect("bot_platform.db")
     cursor = conn.cursor()
-    # جدول المشتركين
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY
         )
     """)
-    # جدول الأزرار المضافة ديناميكياً
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS custom_buttons (
+        CREATE TABLE IF NOT EXISTS buttons (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            button_name TEXT UNIQUE,
-            content_text TEXT DEFAULT 'لا يوجد محتوى مضاف بعد.'
+            parent_id INTEGER DEFAULT 0,
+            title TEXT UNIQUE NOT NULL,
+            content TEXT DEFAULT 'لا يوجد محتوى مضاف لهذه المادة بعد.'
         )
     """)
-    conn.commit()
+    
+    cursor.execute("SELECT COUNT(*) FROM buttons")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO buttons (id, parent_id, title) VALUES (1, 0, '[ الكورس الاول 🔻 ]')")
+        cursor.execute("INSERT INTO buttons (id, parent_id, title) VALUES (2, 0, 'ملخصات الكورس الاول')")
+        cursor.execute("INSERT INTO buttons (id, parent_id, title) VALUES (3, 0, 'الكورس الثاني 🔻')")
+        cursor.execute("INSERT INTO buttons (id, parent_id, title) VALUES (4, 0, 'ملخصات الكورس الثاني')")
+        cursor.execute("INSERT INTO buttons (id, parent_id, title, content) VALUES (5, 0, 'التواصل معنا 💬', 'للتواصل مع الإدارة يرجى مراسلة المعرف المباشر.')")
+        
+        cursor.execute("INSERT INTO buttons (parent_id, title, content) VALUES (1, 'فكر اسلامي', 'محتوى وملازم مادة الفكر الإسلامي...')")
+        cursor.execute("INSERT INTO buttons (parent_id, title, content) VALUES (1, 'الرسم الهندسي', 'محتوى وملازم مادة الرسم الهندسي...')")
+        cursor.execute("INSERT INTO buttons (parent_id, title, content) VALUES (1, 'الورش الهندسية', 'محتوى وملازم مادة الورش الهندسية...')")
+        cursor.execute("INSERT INTO buttons (parent_id, title, content) VALUES (1, 'أنظمة الرقمية', 'محتوى وملازم مادة الأنظمة الرقمية...')")
+        cursor.execute("INSERT INTO buttons (parent_id, title, content) VALUES (1, 'رياضيات', 'محتوى وملازم مادة الرياضيات...')")
+        cursor.execute("INSERT INTO buttons (parent_id, title, content) VALUES (1, 'انكليزي', 'محتوى وملازم مادة الإنكليزي...')")
+        cursor.execute("INSERT INTO buttons (parent_id, title, content) VALUES (1, 'كهربائيه', 'محتوى وملازم مادة الكهربائية...')")
+        conn.commit()
     conn.close()
 
 init_db()
 
 def register_user(user_id: int):
-    conn = sqlite3.connect("bot_data.db")
+    conn = sqlite3.connect("bot_platform.db")
     cursor = conn.cursor()
     cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
     conn.commit()
     conn.close()
 
-def get_custom_buttons():
-    conn = sqlite3.connect("bot_data.db")
+def get_keyboard_by_parent(parent_id=0, is_editor=False):
+    conn = sqlite3.connect("bot_platform.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT button_name FROM custom_buttons")
+    cursor.execute("SELECT title FROM buttons WHERE parent_id = ?", (parent_id,))
     rows = cursor.fetchall()
     conn.close()
-    return [row[0] for row in rows]
 
-def add_custom_button(name: str):
-    conn = sqlite3.connect("bot_data.db")
+    keyboard = []
+    row = []
+    for item in rows:
+        row.append(KeyboardButton(item[0]))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+
+    if parent_id != 0:
+        keyboard.append([KeyboardButton("🔝 القائمة الرئيسية"), KeyboardButton("🔙 رجوع")])
+
+    if is_editor:
+        keyboard.append([KeyboardButton("➕ إضافة زر جديد"), KeyboardButton("📝 تعديل المحتوى")])
+        keyboard.append([KeyboardButton("🛑 إيقاف المحرر")])
+    elif parent_id == 0:
+        keyboard.append([KeyboardButton("⚙️ محرر الأزرار"), KeyboardButton("👨‍✈️ Admin")])
+
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def add_new_button(title: str, parent_id=0):
+    conn = sqlite3.connect("bot_platform.db")
     cursor = conn.cursor()
     try:
-        cursor.execute("INSERT INTO custom_buttons (button_name) VALUES (?)", (name,))
+        cursor.execute("INSERT INTO buttons (parent_id, title) VALUES (?, ?)", (parent_id, title))
         conn.commit()
         success = True
     except sqlite3.IntegrityError:
@@ -74,169 +109,136 @@ def add_custom_button(name: str):
     conn.close()
     return success
 
-def get_button_content(name: str):
-    conn = sqlite3.connect("bot_data.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT content_text FROM custom_buttons WHERE button_name = ?", (name,))
-    row = cursor.fetchone()
-    conn.close()
-    return row[0] if row else "لا يوجد محتوى متاح."
-
-def get_users_count():
-    conn = sqlite3.connect("bot_data.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM users")
-    count = cursor.fetchone()[0]
-    conn.close()
-    return count
-
-# ---------------------------------------------------------
-# بناء لوحات التحكم المنيو والـ Inline (مطابق للصورة)
-# ---------------------------------------------------------
-def get_main_keyboard(is_editor_active=False):
-    """لوحة المفاتيح الرئيسية أسفل الشاشة"""
-    buttons = []
-    
-    # الأزرار الديناميكية
-    custom_btns = get_custom_buttons()
-    for btn_name in custom_btns:
-        buttons.append([KeyboardButton(btn_name)])
-
-    # الأزرار الأساسية الافتراضية إذا لم تكن مضافة ديناميكياً
-    if "[ الكورس الاول 🔻 ]" not in custom_btns:
-        buttons.append([KeyboardButton("[ الكورس الاول 🔻 ]")])
-    if "ملخصات الكورس الاول" not in custom_btns:
-        buttons.append([KeyboardButton("ملخصات الكورس الاول")])
-    if "الكورس الثاني 🔻" not in custom_btns:
-        buttons.append([KeyboardButton("الكورس الثاني 🔻")])
-    if "ملخصات الكورس الثاني" not in custom_btns:
-        buttons.append([KeyboardButton("ملخصات الكورس الثاني")])
-    if "التواصل معنا 💬" not in custom_btns:
-        buttons.append([KeyboardButton("التواصل معنا 💬")])
-
-    # تحكم المحرر
-    if is_editor_active:
-        buttons.append([KeyboardButton("➕ إضافة زر")])
-        buttons.append([KeyboardButton("📝 تعديل المشاركات (المحتوى)"), KeyboardButton("🛑 إيقاف المحرر (التعديل)")])
-    else:
-        buttons.append([KeyboardButton("⚙️ محرر الأزرار"), KeyboardButton("👨‍✈️ Admin")])
-
-    return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
-
-def get_editor_status_inline():
-    """اللوحة الشفافة العلوية المطابقة للصورة تماماً"""
+def get_editor_inline_board():
     text = (
-        "📊 **المساعد الذكي**\n"
-        "◼️ شرط: ---\n"
-        "◼️ محرر: ---\n"
-        "◼️ التنقل: ⏹️ إيقاف\n"
-        "◼️ مكافأة: ---\n"
-        "◼️ إصلاح الصرف: ---\n"
-        "◼️ تبادل الدورات: ---\n"
-        "◼️ إجراءات: ---\n"
-        "◼️ فاتورة: ---\n"
-        "◼️ سحب: ---\n"
-        "◼️ العنوان: ---\n"
-        "◼️ المتجر: ---"
+        "⚙️ **محرر منصة الأزرار المباشر**\n\n"
+        "◼️ حالة التنقل: 🟢 نشط\n"
+        "◼️ إجراء التعديل: جاهز للاستقبال\n\n"
+        "استخدم الأسهم والأدوات أدناه للتحكم في الهيكلية:"
     )
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("⬅️", callback_data="nav_left"),
             InlineKeyboardButton("⬆️", callback_data="nav_up"),
             InlineKeyboardButton("⬇️", callback_data="nav_down"),
-            InlineKeyboardButton("➡️", callback_data="nav_right"),
-            InlineKeyboardButton("➗", callback_data="op_div"),
-            InlineKeyboardButton("✖️", callback_data="op_mul"),
-            InlineKeyboardButton("👓", callback_data="op_view")
+            InlineKeyboardButton("➡️", callback_data="nav_right")
         ],
         [
-            InlineKeyboardButton("➰", callback_data="op_loop"),
-            InlineKeyboardButton("❇️", callback_data="op_star")
+            InlineKeyboardButton("➗ قسم فرعي", callback_data="op_sub"),
+            InlineKeyboardButton("✖️ حذف زر", callback_data="op_del"),
+            InlineKeyboardButton("👓 معاينة", callback_data="op_view")
         ]
     ])
     return text, keyboard
 
-# ---------------------------------------------------------
-# معالجات الأوامر والتفاعلات
-# ---------------------------------------------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     register_user(user_id)
+    context.user_data["current_parent"] = 0
     
-    # إرسال كليشة محرر المنصة الشفافة أولاً
-    status_text, status_markup = get_editor_status_inline()
-    await update.message.reply_text(status_text, reply_markup=status_markup, parse_mode="Markdown")
-    
-    # إرسال القائمة الرئيسية أسفل الرسائل
-    await update.message.reply_text(
-        "مرحباً بك في منصة البوت الذكي. اختر من الأزرار التالية:",
-        reply_markup=get_main_keyboard(is_editor_active=False)
+    welcome = (
+        "ماذا يمكن لهذا البوت فعله؟ 🎓\n"
+        "أهلاً بك في البوت الدراسي 📚\n\n"
+        "نوفر لك المحاضرات والملخصات والأسئلة بأسلوب سلس ورائع.\n"
+        "اختر القسم المطلوب من الأسفل:"
     )
+    await update.message.reply_text(welcome, reply_markup=get_keyboard_by_parent(0))
 
-async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = update.effective_user.id
     register_user(user_id)
+    
+    current_parent = context.user_data.get("current_parent", 0)
+    is_editor = context.user_data.get("is_editor", False)
 
-    # حالة إضافة زر جديد
-    if context.user_data.get("awaiting_button_name"):
-        context.user_data["awaiting_button_name"] = False
-        btn_name = text.strip()
-        if add_custom_button(btn_name):
+    if context.user_data.get("awaiting_btn_name"):
+        context.user_data["awaiting_btn_name"] = False
+        if add_new_button(text.strip(), parent_id=current_parent):
             await update.message.reply_text(
-                f"✅ تم إضافة الزر `{btn_name}` بنجاح!",
-                reply_markup=get_main_keyboard(is_editor_active=True),
+                f"✅ تم إضافة الزر `{text}` بنجاح!",
+                reply_markup=get_keyboard_by_parent(current_parent, is_editor=True),
                 parse_mode="Markdown"
             )
         else:
-            await update.message.reply_text("❌ هذا الزر موجود بالفعل!")
+            await update.message.reply_text("❌ هذا الزر مضاف سابقاً!")
         return
 
-    # الأزرار الأساسية وإدارة المحرر
     if text == "⚙️ محرر الأزرار":
-        context.user_data["editor_active"] = True
-        status_text, status_markup = get_editor_status_inline()
-        await update.message.reply_text("⚙️ **أنت الآن في وضع تحرير الأزرار والقوائم:**", parse_mode="Markdown")
-        await update.message.reply_text(status_text, reply_markup=status_markup, parse_mode="Markdown")
+        if user_id != ADMIN_ID:
+            await update.message.reply_text("❌ هذا الوضع مخصص لمدير البوت فقط.")
+            return
+
+        context.user_data["is_editor"] = True
+        editor_text, editor_markup = get_editor_inline_board()
+        await update.message.reply_text(editor_text, reply_markup=editor_markup, parse_mode="Markdown")
         await update.message.reply_text(
-            "تم تفعيل المحرر. اختر العمليات المطلوب تنفيذها:",
-            reply_markup=get_main_keyboard(is_editor_active=True)
+            "تم تفعيل محرر المنصة. تمكين وضع التعديل أسفل الشاشة:",
+            reply_markup=get_keyboard_by_parent(current_parent, is_editor=True)
         )
 
-    elif text == "🛑 إيقاف المحرر (التعديل)":
-        context.user_data["editor_active"] = False
+    elif text == "🛑 إيقاف المحرر":
+        context.user_data["is_editor"] = False
         await update.message.reply_text(
-            "🛑 تم إيقاف وضع المحرر والعودة إلى القائمة الرئيسية.",
-            reply_markup=get_main_keyboard(is_editor_active=False)
+            "🛑 تم إيقاف وضع التعديل والعودة للوضع الافتراضي.",
+            reply_markup=get_keyboard_by_parent(current_parent, is_editor=False)
         )
 
-    elif text == "➕ إضافة زر":
-        context.user_data["awaiting_button_name"] = True
-        await update.message.reply_text("📝 **أرسل الآن اسم الزر الجديد الذي تريد إضافته:**", parse_mode="Markdown")
+    elif text == "➕ إضافة زر جديد":
+        context.user_data["awaiting_btn_name"] = True
+        await update.message.reply_text("📝 **أرسل الآن الاسم المطلوب للزر الجديد:**", parse_mode="Markdown")
+
+    elif text in ["🔝 القائمة الرئيسية", "🔙 رجوع"]:
+        context.user_data["current_parent"] = 0
+        await update.message.reply_text(
+            "تم العودة للقائمة الرئيسية.",
+            reply_markup=get_keyboard_by_parent(0, is_editor=is_editor)
+        )
 
     elif text == "👨‍✈️ Admin":
         if user_id != ADMIN_ID:
-            await update.message.reply_text("❌ هذه اللوحة مخصصة للآدمن فقط.")
+            await update.message.reply_text("❌ هذه اللوحة مخصصة للأدمن فقط.")
             return
 
-        users_cnt = get_users_count()
+        conn = sqlite3.connect("bot_platform.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM users")
+        u_count = cursor.fetchone()[0]
+        conn.close()
+
         admin_markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"👥 المشتركين: {users_cnt}", callback_data="stats")],
-            [InlineKeyboardButton("📢 إذاعة عامة", callback_data="broadcast")]
+            [InlineKeyboardButton(f"👥 عدد المستخدمين: {u_count}", callback_data="stats")],
+            [InlineKeyboardButton("📢 إذاعة للمستخدمين", callback_data="broadcast")]
         ])
-        await update.message.reply_text("👨‍✈️ **أهلاً بك في لوحة تحكم الأدمن الرئيسي:**", reply_markup=admin_markup, parse_mode="Markdown")
+        await update.message.reply_text("🛠 **لوحة تحكم إدارة المنصة:**", reply_markup=admin_markup, parse_mode="Markdown")
 
     else:
-        # إذا كان الزر المكسور أو المنقر محدد في قاعدة البيانات
-        content = get_button_content(text)
-        await update.message.reply_text(f"📌 **محتوى قسم ({text}):**\n\n{content}", parse_mode="Markdown")
+        conn = sqlite3.connect("bot_platform.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, content FROM buttons WHERE title = ?", (text,))
+        btn_data = cursor.fetchone()
+
+        if btn_data:
+            btn_id, content = btn_data[0], btn_data[1]
+            cursor.execute("SELECT COUNT(*) FROM buttons WHERE parent_id = ?", (btn_id,))
+            has_children = cursor.fetchone()[0] > 0
+
+            if has_children:
+                context.user_data["current_parent"] = btn_id
+                await update.message.reply_text(
+                    f"📂 قسم: **{text}**",
+                    reply_markup=get_keyboard_by_parent(btn_id, is_editor=is_editor),
+                    parse_mode="Markdown"
+                )
+            else:
+                await update.message.reply_text(f"📌 **محتوى {text}:**\n\n{content}", parse_mode="Markdown")
+        else:
+            await update.message.reply_text("الرجاء اختيار أحد الأزرار المتاحة بالقائمة.")
+        conn.close()
 
 async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
-    if query.data.startswith(("nav_", "op_")):
-        await query.answer("⚙️ جاري التعديل والتنقل في الهيكلية...", show_alert=False)
 
 def main():
     if not BOT_TOKEN:
@@ -245,10 +247,10 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_messages))
     app.add_handler(CallbackQueryHandler(handle_callbacks))
 
-    print("Platform Bot Running (Polling Mode)...")
+    print("Bot engine is running automatically via Procfile...")
     app.run_polling()
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 import os
 import logging
-from flask import Flask, request
+import sqlite3
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     ApplicationBuilder,
@@ -12,216 +12,244 @@ from telegram.ext import (
 )
 
 # ---------------------------------------------------------
-# الإعدادات الأساسية
+# الإعدادات وتأمين البيانات
 # ---------------------------------------------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = 5734654153  # معرف الأدمن الخاص بك
-PORT = int(os.getenv("PORT", 8080))
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
+ADMIN_ID = 5734654153  # معرف الآدمن الخاص بك
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-# إنشاء تطبيق Flask وتطبيق Telegram
-flask_app = Flask(__name__)
-bot_app = ApplicationBuilder().token(BOT_TOKEN).build() if BOT_TOKEN else None
+# ---------------------------------------------------------
+# قاعدة البيانات (SQLite) لتخزين الأزرار والمستخدمين
+# ---------------------------------------------------------
+def init_db():
+    conn = sqlite3.connect("bot_data.db")
+    cursor = conn.cursor()
+    # جدول المشتركين
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY
+        )
+    """)
+    # جدول الأزرار المضافة ديناميكياً
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS custom_buttons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            button_name TEXT UNIQUE,
+            content_text TEXT DEFAULT 'لا يوجد محتوى مضاف بعد.'
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def register_user(user_id: int):
+    conn = sqlite3.connect("bot_data.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    conn.commit()
+    conn.close()
+
+def get_custom_buttons():
+    conn = sqlite3.connect("bot_data.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT button_name FROM custom_buttons")
+    rows = cursor.fetchall()
+    conn.close()
+    return [row[0] for row in rows]
+
+def add_custom_button(name: str):
+    conn = sqlite3.connect("bot_data.db")
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT INTO custom_buttons (button_name) VALUES (?)", (name,))
+        conn.commit()
+        success = True
+    except sqlite3.IntegrityError:
+        success = False
+    conn.close()
+    return success
+
+def get_button_content(name: str):
+    conn = sqlite3.connect("bot_data.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT content_text FROM custom_buttons WHERE button_name = ?", (name,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else "لا يوجد محتوى متاح."
+
+def get_users_count():
+    conn = sqlite3.connect("bot_data.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM users")
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
 
 # ---------------------------------------------------------
-# دالة مساعدة لحذف الرسائل القديمة
+# بناء لوحات التحكم المنيو والـ Inline (مطابق للصورة)
 # ---------------------------------------------------------
-async def delete_previous_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    last_msg_id = context.user_data.get("last_msg_id")
-    chat_id = update.effective_chat.id
-    if last_msg_id:
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=last_msg_id)
-        except Exception:
-            pass
+def get_main_keyboard(is_editor_active=False):
+    """لوحة المفاتيح الرئيسية أسفل الشاشة"""
+    buttons = []
+    
+    # الأزرار الديناميكية
+    custom_btns = get_custom_buttons()
+    for btn_name in custom_btns:
+        buttons.append([KeyboardButton(btn_name)])
+
+    # الأزرار الأساسية الافتراضية إذا لم تكن مضافة ديناميكياً
+    if "[ الكورس الاول 🔻 ]" not in custom_btns:
+        buttons.append([KeyboardButton("[ الكورس الاول 🔻 ]")])
+    if "ملخصات الكورس الاول" not in custom_btns:
+        buttons.append([KeyboardButton("ملخصات الكورس الاول")])
+    if "الكورس الثاني 🔻" not in custom_btns:
+        buttons.append([KeyboardButton("الكورس الثاني 🔻")])
+    if "ملخصات الكورس الثاني" not in custom_btns:
+        buttons.append([KeyboardButton("ملخصات الكورس الثاني")])
+    if "التواصل معنا 💬" not in custom_btns:
+        buttons.append([KeyboardButton("التواصل معنا 💬")])
+
+    # تحكم المحرر
+    if is_editor_active:
+        buttons.append([KeyboardButton("➕ إضافة زر")])
+        buttons.append([KeyboardButton("📝 تعديل المشاركات (المحتوى)"), KeyboardButton("🛑 إيقاف المحرر (التعديل)")])
+    else:
+        buttons.append([KeyboardButton("⚙️ محرر الأزرار"), KeyboardButton("👨‍✈️ Admin")])
+
+    return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
+
+def get_editor_status_inline():
+    """اللوحة الشفافة العلوية المطابقة للصورة تماماً"""
+    text = (
+        "📊 **المساعد الذكي**\n"
+        "◼️ شرط: ---\n"
+        "◼️ محرر: ---\n"
+        "◼️ التنقل: ⏹️ إيقاف\n"
+        "◼️ مكافأة: ---\n"
+        "◼️ إصلاح الصرف: ---\n"
+        "◼️ تبادل الدورات: ---\n"
+        "◼️ إجراءات: ---\n"
+        "◼️ فاتورة: ---\n"
+        "◼️ سحب: ---\n"
+        "◼️ العنوان: ---\n"
+        "◼️ المتجر: ---"
+    )
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⬅️", callback_data="nav_left"),
+            InlineKeyboardButton("⬆️", callback_data="nav_up"),
+            InlineKeyboardButton("⬇️", callback_data="nav_down"),
+            InlineKeyboardButton("➡️", callback_data="nav_right"),
+            InlineKeyboardButton("➗", callback_data="op_div"),
+            InlineKeyboardButton("✖️", callback_data="op_mul"),
+            InlineKeyboardButton("👓", callback_data="op_view")
+        ],
+        [
+            InlineKeyboardButton("➰", callback_data="op_loop"),
+            InlineKeyboardButton("❇️", callback_data="op_star")
+        ]
+    ])
+    return text, keyboard
 
 # ---------------------------------------------------------
-# لوحات المفاتيح (Keyboards)
-# ---------------------------------------------------------
-def get_main_keyboard():
-    keyboard = [
-        [KeyboardButton("⚙️ محرر الأزرار"), KeyboardButton("📝 تعديل المشاركات (المحتوى)")],
-        [KeyboardButton("👨‍✈️ Admin")]
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
-def get_admin_keyboard():
-    keyboard = [
-        [InlineKeyboardButton("📊 الإحصائيات", callback_data="admin_stats"), InlineKeyboardButton("📬 البريد المرسل", callback_data="admin_mail")],
-        [InlineKeyboardButton("🧩 Extensions", callback_data="admin_ext"), InlineKeyboardButton("📢 الإعلانات", callback_data="admin_ads")],
-        [InlineKeyboardButton("⚙️ إعدادات البوت", callback_data="admin_settings"), InlineKeyboardButton("🎲 المتغيرات", callback_data="admin_vars")],
-        [InlineKeyboardButton("👣 نظام الإجالة", callback_data="admin_referral"), InlineKeyboardButton("📖 ترقيم الصفحات", callback_data="admin_pagination")],
-        [InlineKeyboardButton("📢 القنوات والمجموعات", callback_data="admin_channels"), InlineKeyboardButton("💭 رسالة البدء", callback_data="admin_start_msg")],
-        [InlineKeyboardButton("👥 إعدادات المشرفين", callback_data="admin_admins"), InlineKeyboardButton("💸 الدفع التلقائي", callback_data="admin_payment")],
-        [InlineKeyboardButton("🛒 المتجر", callback_data="admin_shop"), InlineKeyboardButton("🤖 بوت السكرتير", callback_data="admin_secretary")],
-        [InlineKeyboardButton("🛑 خروج من الإدارة", callback_data="admin_exit")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-# ---------------------------------------------------------
-# المعالجات (Handlers)
+# معالجات الأوامر والتفاعلات
 # ---------------------------------------------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await delete_previous_message(update, context)
-    text = (
-        "🛠 **أهلاً بك في بوت إدارة المحتوى**\n\n"
-        "تم إعادة ضبط البوت إلى الوضع الافتراضي (0 أزرار فرعية).\n"
-        "يرجى اختيار أحد الخيارات من القائمة أدناه للبدء بالتصميم:"
+    user_id = update.effective_user.id
+    register_user(user_id)
+    
+    # إرسال كليشة محرر المنصة الشفافة أولاً
+    status_text, status_markup = get_editor_status_inline()
+    await update.message.reply_text(status_text, reply_markup=status_markup, parse_mode="Markdown")
+    
+    # إرسال القائمة الرئيسية أسفل الرسائل
+    await update.message.reply_text(
+        "مرحباً بك في منصة البوت الذكي. اختر من الأزرار التالية:",
+        reply_markup=get_main_keyboard(is_editor_active=False)
     )
-    msg = await update.message.reply_text(
-        text,
-        reply_markup=get_main_keyboard(),
-        parse_mode="Markdown"
-    )
-    context.user_data["last_msg_id"] = msg.message_id
 
-async def handle_main_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = update.effective_user.id
-    
-    try:
-        await update.message.delete()
-    except Exception:
-        pass
-        
-    await delete_previous_message(update, context)
+    register_user(user_id)
 
+    # حالة إضافة زر جديد
+    if context.user_data.get("awaiting_button_name"):
+        context.user_data["awaiting_button_name"] = False
+        btn_name = text.strip()
+        if add_custom_button(btn_name):
+            await update.message.reply_text(
+                f"✅ تم إضافة الزر `{btn_name}` بنجاح!",
+                reply_markup=get_main_keyboard(is_editor_active=True),
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_text("❌ هذا الزر موجود بالفعل!")
+        return
+
+    # الأزرار الأساسية وإدارة المحرر
     if text == "⚙️ محرر الأزرار":
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ إضافة زر جديد", callback_data="add_btn")],
-            [InlineKeyboardButton("🛑 إيقاف المحرر (التعديل)", callback_data="stop_editor")]
-        ])
-        sent_msg = await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="⚙️ **أنت الآن في وضع تحرير الأزرار**\n\nقم باختيار العمليات المطلوبة لبناء القوائم:",
-            reply_markup=keyboard,
-            parse_mode="Markdown"
+        context.user_data["editor_active"] = True
+        status_text, status_markup = get_editor_status_inline()
+        await update.message.reply_text("⚙️ **أنت الآن في وضع تحرير الأزرار والقوائم:**", parse_mode="Markdown")
+        await update.message.reply_text(status_text, reply_markup=status_markup, parse_mode="Markdown")
+        await update.message.reply_text(
+            "تم تفعيل المحرر. اختر العمليات المطلوب تنفيذها:",
+            reply_markup=get_main_keyboard(is_editor_active=True)
         )
-        context.user_data["last_msg_id"] = sent_msg.message_id
 
-    elif text == "📝 تعديل المشاركات (المحتوى)":
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ إضافة رسالة", callback_data="add_msg"), InlineKeyboardButton("➕ إضافة سؤال", callback_data="add_q")],
-            [InlineKeyboardButton("🛑 إيقاف المحرر", callback_data="stop_editor")]
-        ])
-        sent_msg = await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="📝 **أنت الآن في وضع تحرير المحتوى والرسائل**",
-            reply_markup=keyboard,
-            parse_mode="Markdown"
+    elif text == "🛑 إيقاف المحرر (التعديل)":
+        context.user_data["editor_active"] = False
+        await update.message.reply_text(
+            "🛑 تم إيقاف وضع المحرر والعودة إلى القائمة الرئيسية.",
+            reply_markup=get_main_keyboard(is_editor_active=False)
         )
-        context.user_data["last_msg_id"] = sent_msg.message_id
+
+    elif text == "➕ إضافة زر":
+        context.user_data["awaiting_button_name"] = True
+        await update.message.reply_text("📝 **أرسل الآن اسم الزر الجديد الذي تريد إضافته:**", parse_mode="Markdown")
 
     elif text == "👨‍✈️ Admin":
         if user_id != ADMIN_ID:
-            sent_msg = await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="❌ عفواً، هذه اللوحة مخصصة للآدمن فقط."
-            )
-            context.user_data["last_msg_id"] = sent_msg.message_id
+            await update.message.reply_text("❌ هذه اللوحة مخصصة للآدمن فقط.")
             return
 
-        admin_text = (
-            "🛠 **أنت في قائمة المسؤول الرئيسي.**\n\n"
-            "📊 **حالة النظام:** نشط\n"
-            "✉️ **الرسائل:** 49971/50000\n"
-            "⚙️ اختر القسم الذي تريد إدارته من اللوحة أدناه:"
-        )
-        sent_msg = await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=admin_text,
-            reply_markup=get_admin_keyboard(),
-            parse_mode="Markdown"
-        )
-        context.user_data["last_msg_id"] = sent_msg.message_id
+        users_cnt = get_users_count()
+        admin_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"👥 المشتركين: {users_cnt}", callback_data="stats")],
+            [InlineKeyboardButton("📢 إذاعة عامة", callback_data="broadcast")]
+        ])
+        await update.message.reply_text("👨‍✈️ **أهلاً بك في لوحة تحكم الأدمن الرئيسي:**", reply_markup=admin_markup, parse_mode="Markdown")
 
-async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    else:
+        # إذا كان الزر المكسور أو المنقر محدد في قاعدة البيانات
+        content = get_button_content(text)
+        await update.message.reply_text(f"📌 **محتوى قسم ({text}):**\n\n{content}", parse_mode="Markdown")
+
+async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data
-
-    if data == "admin_exit":
-        await query.message.delete()
-        sent_msg = await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="🔝 **تم العودة للقائمة الرئيسية**",
-            reply_markup=get_main_keyboard()
-        )
-        context.user_data["last_msg_id"] = sent_msg.message_id
-
-    elif data == "admin_admins":
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ إضافة مشرف", callback_data="add_sub_admin")],
-            [InlineKeyboardButton("🔝 إلى الإدارة", callback_data="back_to_admin"), InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="admin_exit")]
-        ])
-        await query.edit_message_text(
-            text="🔧 **أنت في وضع إعدادات المشرفين داخل البوت.**\n\n👥 **المشرفون الحاليون:**\n-- لا يوجد مشرفين فرعيين --",
-            reply_markup=keyboard,
-            parse_mode="Markdown"
-        )
-
-    elif data == "back_to_admin":
-        admin_text = (
-            "🛠 **أنت في قائمة المسؤول الرئيسي.**\n\n"
-            "📊 **حالة النظام:** نشط\n"
-            "⚙️ اختر القسم الذي تريد إدارته من اللوحة أدناه:"
-        )
-        await query.edit_message_text(
-            text=admin_text,
-            reply_markup=get_admin_keyboard(),
-            parse_mode="Markdown"
-        )
-
-    elif data == "stop_editor":
-        await query.message.delete()
-        sent_msg = await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="🛑 **تم إيقاف وضع المحرر.**",
-            reply_markup=get_main_keyboard()
-        )
-        context.user_data["last_msg_id"] = sent_msg.message_id
-
-    elif data == "add_btn":
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🚫 إلغاء", callback_data="stop_editor")]
-        ])
-        await query.edit_message_text(
-            text="➕ **أدخل اسماً للزر الجديد:**\n\nاضغط على (إلغاء) إذا غيرت رأيك.",
-            reply_markup=keyboard,
-            parse_mode="Markdown"
-        )
-
-# تسجيل الأوامر والمعالجات
-bot_app.add_handler(CommandHandler("start", start_command))
-bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu_text))
-bot_app.add_handler(CallbackQueryHandler(handle_callback_query))
-
-# ---------------------------------------------------------
-# نقاط الاتصال الخاصة بـ Flask Server
-# ---------------------------------------------------------
-@flask_app.route("/", methods=["GET"])
-def index():
-    return "Bot is running!", 200
-
-@flask_app.route(f"/{BOT_TOKEN}", methods=["POST"])
-async def webhook():
-    """استقبال التحديثات من تليجرام وتمريرها للبوت"""
-    json_str = request.get_data(as_text=True)
-    update = Update.de_json(request.get_json(force=True), bot_app.bot)
-    await bot_app.process_update(update)
-    return "OK", 200
-
-# ---------------------------------------------------------
-# بدء التشغيل
-# ---------------------------------------------------------
-if __name__ == "__main__":
-    if not BOT_TOKEN:
-        raise ValueError("BOT_TOKEN is not set!")
     
-    # التأكد من ثبات ملفات requirements.txt بوجود Flask
-    flask_app.run(host="0.0.0.0", port=PORT)
+    if query.data.startswith(("nav_", "op_")):
+        await query.answer("⚙️ جاري التعديل والتنقل في الهيكلية...", show_alert=False)
+
+def main():
+    if not BOT_TOKEN:
+        raise ValueError("BOT_TOKEN missing in environment variables!")
+
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
+    app.add_handler(CallbackQueryHandler(handle_callbacks))
+
+    print("Platform Bot Running (Polling Mode)...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()

@@ -14,10 +14,12 @@ from telegram.ext import (
 # ---------------------------------------------------------
 # الإعدادات الأساسية
 # ---------------------------------------------------------
-# جلب التوكن من متغيرات البيئة في Render
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 ADMIN_ID = 5734654153  # معرف الأدمن الخاص بك
+
+# جلب رابط التطبيق والمنفذ المخصص من متغيرات بيئة Render
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")  # مثال: https://your-app.onrender.com
+PORT = int(os.getenv("PORT", 8080))
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -25,10 +27,9 @@ logging.basicConfig(
 )
 
 # ---------------------------------------------------------
-# دالة مساعدة لحذف الرسائل القديمة (منع تكدس الشاشة)
+# دالة مساعدة لحذف الرسائل القديمة
 # ---------------------------------------------------------
 async def delete_previous_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """حذف الرسالة السابقة إن وجدت للحفاظ على نظافة واجهة المحادثة"""
     last_msg_id = context.user_data.get("last_msg_id")
     chat_id = update.effective_chat.id
     if last_msg_id:
@@ -41,7 +42,6 @@ async def delete_previous_message(update: Update, context: ContextTypes.DEFAULT_
 # لوحات المفاتيح (Keyboards)
 # ---------------------------------------------------------
 def get_main_keyboard():
-    """القائمة الرئيسية المقتصرة على 3 أزرار فقط"""
     keyboard = [
         [KeyboardButton("⚙️ محرر الأزرار"), KeyboardButton("📝 تعديل المشاركات (المحتوى)")],
         [KeyboardButton("👨‍✈️ Admin")]
@@ -49,7 +49,6 @@ def get_main_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def get_admin_keyboard():
-    """لوحة تحكم الأدمن الشاملة بتصميم Menu Builder Bot"""
     keyboard = [
         [InlineKeyboardButton("📊 الإحصائيات", callback_data="admin_stats"), InlineKeyboardButton("📬 البريد المرسل", callback_data="admin_mail")],
         [InlineKeyboardButton("🧩 Extensions", callback_data="admin_ext"), InlineKeyboardButton("📢 الإعلانات", callback_data="admin_ads")],
@@ -81,14 +80,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     context.user_data["last_msg_id"] = msg.message_id
 
-# ---------------------------------------------------------
-# معالجة النصوص والأزرار الرئيسية
-# ---------------------------------------------------------
 async def handle_main_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = update.effective_user.id
     
-    # حذف رسالة المستخدم نفسها لإبقاء الواجهة نظيفة
     try:
         await update.message.delete()
     except Exception:
@@ -145,9 +140,6 @@ async def handle_main_menu_text(update: Update, context: ContextTypes.DEFAULT_TY
         )
         context.user_data["last_msg_id"] = sent_msg.message_id
 
-# ---------------------------------------------------------
-# معالجة الضغطات على الأزرار الشفافة
-# ---------------------------------------------------------
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -205,11 +197,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
 # ---------------------------------------------------------
-# التشغيل الرئيسي (Asyncio Compatible for Render)
+# التشغيل الرئيسي
 # ---------------------------------------------------------
-async def main_async():
+def main():
     if not BOT_TOKEN:
-        raise ValueError("خطأ: لم يتم العثور على BOT_TOKEN! تأكد من إضافته في قسم Environment على Render.")
+        raise ValueError("خطأ: لم يتم العثور على BOT_TOKEN!")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -217,17 +209,18 @@ async def main_async():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu_text))
     app.add_handler(CallbackQueryHandler(handle_callback_query))
 
-    print("تم تشغيل البوت بنجاح...")
-
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    
-    # الإبقاء على البوت يعمّل باستمرار
-    await asyncio.Event().wait()
+    # إذا كان التطبيق مرفوعاً على Render يستخدم Webhook، وإلا يستخدم Polling محلياً
+    if RENDER_EXTERNAL_URL:
+        print("تشغيل البوت بنمط Webhook...")
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=BOT_TOKEN,
+            webhook_url=f"{RENDER_EXTERNAL_URL}/{BOT_TOKEN}"
+        )
+    else:
+        print("تشغيل البوت بنمط Polling (محلياً)...")
+        app.run_polling()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main_async())
-    except (KeyboardInterrupt, SystemExit):
-        pass
+    main()
